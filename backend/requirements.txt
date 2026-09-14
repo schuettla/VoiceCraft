@@ -1,0 +1,24 @@
+# Core backend — safe to install anywhere.
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+pydantic==2.10.4
+sqlalchemy==2.0.36
+python-multipart==0.0.20
+soundfile==0.12.1
+numpy>=1.26,<3
+huggingface_hub>=0.26   # the Models page downloads and removes weights directly
+
+# --- TTS engines ---------------------------------------------------------
+# torch is intentionally NOT pinned here: on Windows it must come from the
+# CUDA index, and a plain `pip install torch` silently installs the CPU wheel
+# (PRD §10). Install it first, explicitly:
+#
+#   pip install torch==2.5.1 torchaudio==2.5.1 --index-url https://download.pytorch.org/whl/cu121
+#
+# then install this file. Verify with:
+#   python -c "import torch; print(torch.cuda.is_available())"
+qwen-tts          # Qwen3-TTS: the *-Base checkpoints do the voice cloning
+transformers>=4.47
+accelerate>=1.2
+kokoro==0.9.4
+misaki[en]==0.9.4

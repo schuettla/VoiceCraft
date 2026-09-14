@@ -1,0 +1,18 @@
+{
+  "name": "voicecraft",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Local-first voice cloning and podcast assembly studio",
+  "scripts": {
+    "dev": "tauri dev",
+    "build": "tauri build",
+    "app:dev": "npm --prefix app run dev",
+    "app:build": "npm --prefix app run build",
+    "backend:dev": "python backend/main.py --reload",
+    "backend:test": "python backend/tests/test_smoke.py",
+    "tauri": "tauri"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.1.0"
+  }
+}

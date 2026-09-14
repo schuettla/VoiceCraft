@@ -1,0 +1,128 @@
+@import "tailwindcss";
+
+/*
+ * Linear — "midnight precision instrument"
+ * Near-black substrate, paper-white type at tight tracking, one electric
+ * acid-lime accent used as a functional flashlight. Elevation comes from
+ * hairline borders, not shadow. See DESIGN.md.
+ *
+ * The app was built against an `ink-*` / `accent` token scale; those names are
+ * kept but their values now map onto Linear's ramp, so the whole UI re-skins
+ * without touching every page.
+ */
+@theme {
+  /* Surfaces — Void → Carbon → Obsidian → Graphite, plus in-between steps. */
+  --color-ink-950: #08090a; /* Void — page canvas */
+  --color-ink-900: #0f1011; /* Carbon — cards, nav bars */
+  --color-ink-850: #131415;
+  --color-ink-800: #161718; /* Obsidian — elevated / ghost surfaces */
+  --color-ink-700: #23252a; /* Graphite — hairline borders, dividers */
+  --color-ink-600: #383b3f; /* Smoke — higher-contrast hairlines */
+  --color-ink-500: #4b4f56;
+
+  /* Text — muted metadata up to max-contrast headings. */
+  --color-ink-400: #8a8f98; /* Fog — muted body, placeholders, icons */
+  --color-ink-300: #a9aeb7;
+  --color-ink-200: #d0d6e0; /* Mist — body copy, button text on dark */
+  --color-ink-100: #e5e5e6; /* Bone — near-white fills */
+
+  /* The one chromatic element in the system. */
+  --color-accent: #e4f222; /* Acid Lime — the single primary action */
+  --color-accent-strong: #d2df1e; /* hover only */
+  --color-accent-soft: #e4f2221f;
+
+  /* Supporting accents — decorative / tag fills, never status. */
+  --color-pulse-green: #27a644;
+  --color-coral-red: #eb5757;
+  --color-signal-teal: #02b8cc;
+  --color-iris-violet: #6366f1;
+  --color-lavender: #8b5cf6;
+
+  --font-sans: "Inter Variable", "Inter", ui-sans-serif, system-ui, -apple-system,
+    "Segoe UI", Roboto, sans-serif;
+  --font-mono: "Berkeley Mono", "JetBrains Mono", ui-monospace, "Cascadia Mono",
+    Menlo, monospace;
+
+  /* Three radii is the whole vocabulary: 6px controls, 12px cards, full pills. */
+  --radius-md: 6px;
+  --radius-lg: 6px;
+  --radius-xl: 12px;
+  --radius-2xl: 12px;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  background: var(--color-ink-950);
+  color: var(--color-ink-200);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  letter-spacing: -0.011em;
+  /* Inter alternate glyphs — Linear's typographic signature. */
+  font-feature-settings: "cv01" on, "ss03" on, "zero" on;
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* Display type is tracked tighter still. */
+h1,
+h2,
+h3 {
+  letter-spacing: -0.022em;
+}
+
+::selection {
+  background: var(--color-accent);
+  color: var(--color-ink-950);
+}
+
+/* Tauri: the shell chrome is ours, so kill the browser-y affordances. */
+* {
+  user-select: none;
+}
+input,
+textarea {
+  user-select: text;
+}
+
+audio {
+  color-scheme: dark;
+}
+
+/* Buttons and links don't get a pointer cursor from the UA stylesheet. */
+button:not(:disabled),
+a[href],
+[role="button"]:not([aria-disabled="true"]) {
+  cursor: pointer;
+}
+
+/* Native controls: keep the OS-drawn parts (the open <option> list, spinners,
+ * date pickers) on the dark side rather than a white flash. */
+select,
+input {
+  color-scheme: dark;
+}
+option {
+  background: var(--color-ink-900);
+  color: var(--color-ink-200);
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--color-ink-700);
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-ink-600);
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}

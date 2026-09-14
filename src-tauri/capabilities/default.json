@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "The webview only talks to the local backend over HTTP; process spawning happens in Rust, so no shell permissions are granted to the frontend.",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}
