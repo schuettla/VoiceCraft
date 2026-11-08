@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import datetime as dt
+import json
 from enum import Enum
-from typing import Literal
+from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 import config
 
@@ -14,6 +15,7 @@ import config
 class Engine(str, Enum):
     qwen = "qwen"
     kokoro = "kokoro"
+    kitten = "kitten"
 
 
 class VoiceStatus(str, Enum):
@@ -34,6 +36,7 @@ class GenerationStatus(str, Enum):
 
 
 AudioFormat = Literal["wav", "mp3", "ogg", "flac"]
+GenerationKind = Literal["speech", "music", "sfx"]
 
 
 # --------------------------------------------------------------------------
@@ -88,6 +91,105 @@ class GenerateRequest(BaseModel):
     # The engines emit WAV; anything else is an ffmpeg transcode of it, done
     # as part of the job so the history holds the format that was asked for.
     output_format: AudioFormat = "wav"
+    # KittenTTS 2 options, kept in the generation's `params`. Other engines
+    # have no such knobs and ignore them.
+    preset: Literal["stable", "expressive"] | None = None
+    seed: int | None = Field(default=None, ge=0, le=2**31 - 1)
+
+
+AudioKind = Literal["music", "sfx"]
+
+# The longest effect MOSS can make; the music ceiling is ACE-Step's "up to 10
+# minutes". Per-machine limits (a 6 GB card gets 30 s of music) are enforced by
+# the service, which knows the hardware.
+SFX_MAX_SECONDS = 30.0
+MUSIC_MAX_SECONDS = 600.0
+MUSIC_MIN_SECONDS = 10.0
+MUSIC_STYLE_MAX_CHARS = 512
+MUSIC_LYRICS_MAX_CHARS = 4096
+
+
+class AudioGenerateRequest(BaseModel):
+    """`POST /api/generations/audio` — a music or sound-effect job (§5.3)."""
+
+    kind: AudioKind
+    # Defaults to the kind's default engine; must be installed.
+    engine: str | None = Field(default=None, max_length=32, pattern=r"^[a-z0-9_]+$")
+    prompt: str = Field(min_length=1, max_length=4000)
+    duration_seconds: float = Field(gt=0, le=MUSIC_MAX_SECONDS)
+    lyrics: str | None = Field(default=None, max_length=8000)   # music only
+    seed: int | None = Field(default=None, ge=0, le=2**31 - 1)
+    steps: int | None = Field(default=None, ge=1, le=200)
+    guidance: float | None = Field(default=None, ge=0, le=50)
+    takes: int = Field(default=1, ge=1, le=4)                    # sfx only
+    output_format: AudioFormat = "wav"
+
+    @field_validator("prompt")
+    @classmethod
+    def _prompt_not_blank(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("describe the sound you want")
+        return value
+
+    @field_validator("lyrics")
+    @classmethod
+    def _blank_lyrics_mean_instrumental(cls, value: str | None) -> str | None:
+        return value.strip() or None if value is not None else None
+
+    @model_validator(mode="after")
+    def _kind_rules(self) -> "AudioGenerateRequest":
+        if self.kind == "sfx":
+            if self.duration_seconds > SFX_MAX_SECONDS:
+                raise ValueError(f"a sound effect can be at most {SFX_MAX_SECONDS:.0f} seconds")
+            if self.lyrics:
+                raise ValueError("lyrics only apply to music")
+        else:
+            if self.takes > 1:
+                raise ValueError("several takes are only available for sound effects")
+            # The engine's documented ranges (acestep/inference.py).
+            if self.duration_seconds < MUSIC_MIN_SECONDS:
+                raise ValueError(f"a song must be at least {MUSIC_MIN_SECONDS:.0f} seconds")
+            if len(self.prompt) > MUSIC_STYLE_MAX_CHARS:
+                raise ValueError(
+                    f"describe the style in {MUSIC_STYLE_MAX_CHARS} characters or fewer; "
+                    "the lyrics go in their own box"
+                )
+            if self.lyrics and len(self.lyrics) > MUSIC_LYRICS_MAX_CHARS:
+                raise ValueError(f"lyrics can be at most {MUSIC_LYRICS_MAX_CHARS} characters")
+        return self
+
+
+class AudioEngineOut(BaseModel):
+    """One music / SFX engine and what this machine can do with it (§5.3)."""
+
+    name: str
+    kind: AudioKind
+    label: str
+    default: bool                       # the engine its kind uses when none is named
+    installed: bool                     # the engine's Python packages import
+    supported: bool                     # this hardware can run it
+    unsupported_reason: str | None = None
+    warning: str | None = None          # runs, with a caveat worth showing
+    max_duration_seconds: float | None = None   # longest clip on this hardware
+    # What a request without steps / guidance gets, so the form can show it.
+    default_steps: int | None = None
+    default_guidance: float | None = None
+    loaded: bool = False
+    device: str | None = None
+    # The checkpoint it would load, and whether it is on disk.
+    model_id: str | None = None
+    model_title: str | None = None
+    model_downloaded: bool = False
+    download_estimate_bytes: int | None = None
+    license_tier: Literal["open", "conditional", "noncommercial"] = "open"
+    license_name: str | None = None
+    license_url: str | None = None
+    gated: bool = False
+    # Whether the engine can sing lyrics (music engines only; false for sfx).
+    lyrics: bool = True
+    # installed + weights + supported: a generation would be accepted right now.
+    ready: bool = False
 
 
 class GenerationOut(BaseModel):
@@ -95,6 +197,11 @@ class GenerationOut(BaseModel):
 
     id: str
     profile_id: str | None
+    # What was made and by which engine. Speech rows predate these columns and
+    # read back as kind="speech" with the engine resolved from the profile.
+    kind: GenerationKind = "speech"
+    engine: str | None = None
+    params: dict[str, Any] | None = None
     text: str
     status: GenerationStatus
     audio_path: str | None
@@ -105,6 +212,19 @@ class GenerationOut(BaseModel):
     warning: str | None
     created_at: dt.datetime
     completed_at: dt.datetime | None
+
+    @field_validator("params", mode="before")
+    @classmethod
+    def _parse_params(cls, value: Any) -> Any:
+        # Stored as JSON text so the column never needs a migration when a new
+        # engine adds an option.
+        if isinstance(value, str):
+            try:
+                parsed = json.loads(value)
+            except ValueError:
+                return None
+            return parsed if isinstance(parsed, dict) else None
+        return value
 
 
 # --------------------------------------------------------------------------
@@ -456,7 +576,7 @@ class ModelOut(BaseModel):
     repo_id: str
     title: str
     category: str
-    engine: Engine
+    engine: str                     # backends/ registry name (speech, music or sfx engine)
     summary: str
     notes: list[str]
     languages: list[str]
@@ -469,6 +589,15 @@ class ModelOut(BaseModel):
     engine_available: bool          # engine's Python deps are installed
     path: str | None
     job: DownloadJobOut | None = None
+    # Added for music / SFX / Kitten; every one has a default so the page keeps
+    # working against entries that don't set them.
+    variant: str | None = None          # tells entries sharing one repo apart
+    shared_with: list[str] = Field(default_factory=list)  # ids in the same repo
+    optional_engine: bool = False       # engine packages are installed on demand
+    license_tier: Literal["open", "conditional", "noncommercial"] = "open"
+    license_name: str | None = None
+    license_url: str | None = None
+    gated: bool = False                 # download needs a Hugging Face token
 
 
 class ModelCategoryOut(BaseModel):
@@ -483,6 +612,18 @@ class ModelsOut(BaseModel):
     used_bytes: int
     categories: list[ModelCategoryOut]
     models: list[ModelOut]
+
+
+class HfTokenRequest(BaseModel):
+    """A Hugging Face access token, for gated downloads. Write-only: never echoed."""
+
+    token: str = Field(min_length=1, max_length=300, repr=False)
+
+
+class HfTokenStatus(BaseModel):
+    configured: bool
+    # "app": pasted here. "huggingface": HF_TOKEN or a huggingface-cli login.
+    source: Literal["app", "huggingface"] | None = None
 
 
 class StorageRequest(BaseModel):
@@ -503,7 +644,10 @@ class EngineStatus(BaseModel):
     device: str | None = None
     detail: str | None = None
     model: str | None = None          # repo id this engine will load
+    model_id: str | None = None       # catalog entry it came from (None: an override)
     model_downloaded: bool = False    # …and whether its weights are on disk
+    # Installed on demand (music, SFX): the header must not warn that it is missing.
+    optional: bool = False
 
 
 class HealthOut(BaseModel):
@@ -557,6 +701,21 @@ class SettingsOut(BaseModel):
     gpu: dict
     engines_loaded: list[str]
     preferences: Preferences
+
+
+class ResourcesOut(BaseModel):
+    """Live machine load for the sidebar's resource panel. Every figure is
+    optional: psutil may be missing and not every GPU reports memory."""
+
+    ram_used_bytes: int | None = None
+    ram_total_bytes: int | None = None
+    cpu_percent: float | None = None
+    cpu_cores: int | None = None
+    cpu_vendor: str | None = None
+    gpu_name: str | None = None
+    gpu_backend: str | None = None  # "CUDA" | "Metal" | None
+    gpu_mem_used_bytes: int | None = None
+    gpu_mem_total_bytes: int | None = None
 
 
 class CleanupResult(BaseModel):

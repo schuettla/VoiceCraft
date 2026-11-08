@@ -2,7 +2,9 @@ import { useEffect, useRef, useState } from "react";
 import { AUDIO_FORMATS, formatDuration } from "../../lib/format";
 import type { AudioFormat, RenderJob } from "../../lib/types";
 import { api } from "../../lib/api";
-import { Button, Field, Select } from "../../components/ui";
+import { Field, OptionSelect } from "../../components/common";
+import { Button } from "@/components/ui/button";
+import { Progress } from "@/components/ui/progress";
 import { Dialog } from "../../components/Dialog";
 import { useToast } from "../../components/Toaster";
 import { useMedia } from "../MediaContext";
@@ -62,9 +64,9 @@ export function ExportDialog({ onClose }: { onClose: () => void }) {
       title="Export"
       footer={
         <>
-          <Button onClick={cancel}>{job?.state === "rendering" || job?.state === "measuring" ? "Cancel" : "Close"}</Button>
+          <Button variant="outline" onClick={cancel}>{job?.state === "rendering" || job?.state === "measuring" ? "Cancel" : "Close"}</Button>
           {!job && (
-            <Button variant="primary" onClick={startRender}>
+            <Button onClick={startRender}>
               Render
             </Button>
           )}
@@ -73,33 +75,26 @@ export function ExportDialog({ onClose }: { onClose: () => void }) {
     >
       <div className="space-y-3">
         <Field label="Format">
-          <Select value={format} onChange={(e) => setFormat(e.target.value as AudioFormat)}>
-            {AUDIO_FORMATS.map((f) => (
-              <option key={f} value={f}>
-                {f.toUpperCase()}
-              </option>
-            ))}
-          </Select>
+          <OptionSelect
+            value={format}
+            onChange={(value) => setFormat(value as AudioFormat)}
+            options={AUDIO_FORMATS.map((f) => ({ value: f, label: f.toUpperCase() }))}
+          />
         </Field>
 
         {job && (
-          <div className="border border-ink-700 bg-white/[0.02] p-3">
-            <div className="flex items-center justify-between text-[12px] text-ink-300">
+          <div className="space-y-2">
+            <div className="flex items-center justify-between text-[13px] text-muted-foreground">
               <span className="capitalize">{job.state}</span>
               <span className="font-mono">{Math.round(job.progress * 100)}%</span>
             </div>
-            <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-ink-800">
-              <div
-                className="h-full bg-accent transition-[width]"
-                style={{ width: `${Math.round(job.progress * 100)}%` }}
-              />
-            </div>
+            <Progress className="h-1.5" value={Math.round(job.progress * 100)} />
             {job.state === "completed" && job.asset && (
               <div className="mt-3 space-y-2">
-                <p className="text-[12px] text-ink-300">
+                <p className="text-[13px] text-muted-foreground">
                   {job.asset.name} · {formatDuration(job.asset.duration_seconds)}
                 </p>
-                <Button size="sm" onClick={() => api.reveal(job.asset!.path)}>
+                <Button size="sm" variant="outline" onClick={() => api.reveal(job.asset!.path)}>
                   Reveal in folder
                 </Button>
               </div>

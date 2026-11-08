@@ -19,8 +19,10 @@ import logging
 from importlib.util import find_spec
 from pathlib import Path
 
-import config
+import catalog
+from backends import device as devices
 from backends.base import BackendUnavailable, SynthesisResult, VoicePrint, VoiceSpec
+from utils import audio
 
 log = logging.getLogger(__name__)
 
@@ -45,28 +47,10 @@ LANGUAGES = {
 }
 
 
-def _load_reference(path: str) -> tuple:
-    """Decode the reference clip to mono float32, peak-normalized.
-
-    Handing the model a `(samples, rate)` tuple rather than a path lets us fix
-    the two things that upset it: stereo input, and clips that decode above
-    1.0 (which it warns about and which skews the speaker embedding).
-    """
-    import numpy as np  # noqa: PLC0415
-    import soundfile as sf  # noqa: PLC0415
-
-    samples, rate = sf.read(path, dtype="float32", always_2d=False)
-    if samples.ndim > 1:
-        samples = samples.mean(axis=1)
-    peak = float(np.max(np.abs(samples))) if samples.size else 0.0
-    if peak > 0:
-        samples = samples * (0.95 / peak)
-    return np.ascontiguousarray(samples, dtype="float32"), int(rate)
-
-
 class QwenBackend:
     name = "qwen"
     supports_cloning = True
+    optional = False
 
     def __init__(self) -> None:
         self._model = None
@@ -88,29 +72,19 @@ class QwenBackend:
         return self._device
 
     def _pick_device(self):
-        """CUDA when present, Apple Silicon MPS next, else CPU (PRD §8)."""
-        import torch  # noqa: PLC0415
+        """CUDA when present, Apple Silicon MPS next, else CPU (PRD §8).
 
-        if torch.cuda.is_available():
-            major, _minor = torch.cuda.get_device_capability()
-            if major >= 8:
-                attn = "flash_attention_2" if find_spec("flash_attn") else "sdpa"
-                return "cuda:0", torch.bfloat16, attn, None
-            # Pre-Ampere (GTX 10xx and friends): bf16 doesn't exist and float16
-            # generation blows up with a device-side assert — logits go NaN and
-            # sampling indexes out of range. float32 is slower but correct.
-            return "cuda:0", torch.float32, "sdpa", (
-                "This GPU predates bfloat16, so Qwen3-TTS runs in float32 — correct, "
-                "but slower and heavier on VRAM."
-            )
-
-        if torch.backends.mps.is_available():
-            return "mps", torch.float16, "sdpa", None
-
-        return "cpu", torch.float32, "sdpa", (
-            "No GPU acceleration is available — Qwen3-TTS is running on CPU and will "
-            "be very slow. Install a CUDA build of PyTorch (re-run setup)."
+        Pre-Ampere cards (GTX 10xx and friends) have no bf16, and float16
+        generation blows up with a device-side assert — logits go NaN and
+        sampling indexes out of range — so `allow_fp16` stays off and the
+        helper picks float32: slower, but correct.
+        """
+        plan = devices.pick_device(
+            engine="Qwen3-TTS", wants_bf16=True, allow_fp16=False, supports_mps=True
         )
+        flash = plan.kind == "cuda" and plan.dtype_name == "bfloat16" and find_spec("flash_attn")
+        attn = "flash_attention_2" if flash else "sdpa"
+        return plan.device, plan.dtype, attn, plan.warning
 
     # -- lifecycle -------------------------------------------------------
 
@@ -130,7 +104,7 @@ class QwenBackend:
 
         # Read the checkpoint at load time, not at import: the Models page can
         # change it while the app is running, and it unloads us when it does.
-        model_id = config.qwen_model_id()
+        model_id = catalog.active_repo_id("qwen")
         log.info("loading %s on %s (%s, attn=%s)", model_id, device, dtype, attn)
         try:
             self._model = Qwen3TTSModel.from_pretrained(
@@ -152,12 +126,7 @@ class QwenBackend:
         self._model = None
         self._prompt_cache.clear()
         self._device = None
-        try:
-            import torch  # noqa: PLC0415
-
-            torch.cuda.empty_cache()
-        except Exception:  # pragma: no cover - best effort
-            pass
+        devices.release_gpu_memory()
 
     # -- synthesis -------------------------------------------------------
 
@@ -168,7 +137,7 @@ class QwenBackend:
         without one, `x_vector_only_mode` uses the speaker embedding alone —
         the model card warns that quality drops, which the UI says too.
         """
-        waveform, rate = _load_reference(voice.sample_path)
+        waveform, rate = audio.load_reference(voice.sample_path)
         items = self._model.create_voice_clone_prompt(
             ref_audio=(waveform, rate),
             ref_text=voice.sample_text or None,
@@ -195,7 +164,7 @@ class QwenBackend:
 
         items, seconds = self._extract(voice)
         item = items[0]
-        model_id = config.qwen_model_id()
+        model_id = catalog.active_repo_id("qwen")
 
         payload = {
             "version": VOICE_PRINT_VERSION,
@@ -244,12 +213,12 @@ class QwenBackend:
         if payload.get("version") != VOICE_PRINT_VERSION:
             log.info("voice print %s predates this build; re-extracting", path)
             return None
-        if payload.get("model_id") != config.qwen_model_id():
+        if payload.get("model_id") != catalog.active_repo_id("qwen"):
             log.info(
                 "voice print %s was extracted with %s, now using %s; re-extracting",
                 path,
                 payload.get("model_id"),
-                config.qwen_model_id(),
+                catalog.active_repo_id("qwen"),
             )
             return None
 

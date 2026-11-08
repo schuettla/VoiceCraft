@@ -1,4 +1,7 @@
-export type Engine = "qwen" | "kokoro";
+export type Engine = "qwen" | "kokoro" | "kitten";
+
+/** KittenTTS 2 decoding style: steadier, or more animated. */
+export type KittenStyle = "stable" | "expressive";
 
 export type GenerationStatus = "queued" | "processing" | "completed" | "failed";
 
@@ -31,9 +34,17 @@ export interface Profile {
   voice_prepared_at: string | null;
 }
 
+/** What a generation produced. Rows from before music / SFX read as "speech". */
+export type GenerationKind = "speech" | "music" | "sfx";
+
 export interface Generation {
   id: string;
   profile_id: string | null;
+  kind: GenerationKind;
+  /** Engine that made it (null on rows that predate the column). */
+  engine: string | null;
+  /** Per-generation options (seed, preset, lyrics, …). */
+  params: Record<string, unknown> | null;
   text: string;
   status: GenerationStatus;
   audio_path: string | null;
@@ -65,7 +76,56 @@ export interface EngineStatus {
   device: string | null;
   detail: string | null;
   model: string | null;
+  /** Catalog entry the engine is using; null for an environment override. */
+  model_id: string | null;
   model_downloaded: boolean;
+  /** Installed on demand — don't warn that it's missing. */
+  optional: boolean;
+}
+
+/** The two on-demand audio kinds (speech has profiles and its own endpoints). */
+export type AudioKind = "music" | "sfx";
+
+/** One music / SFX engine and what this machine can do with it. */
+export interface AudioEngine {
+  name: string;
+  kind: AudioKind;
+  label: string;
+  /** The engine its kind uses when none is named. */
+  default: boolean;
+  /** Its Python packages import. */
+  installed: boolean;
+  /** This hardware can run it; `unsupported_reason` says why not. */
+  supported: boolean;
+  unsupported_reason: string | null;
+  /** Runs, with a caveat worth showing (slow, capped length). */
+  warning: string | null;
+  /** Longest clip on this hardware, in seconds. */
+  max_duration_seconds: number | null;
+  /** What a request without steps / guidance gets (null: the engine decides). */
+  default_steps: number | null;
+  default_guidance: number | null;
+  loaded: boolean;
+  device: string | null;
+  model_id: string | null;
+  model_title: string | null;
+  model_downloaded: boolean;
+  download_estimate_bytes: number | null;
+  license_tier: LicenseTier;
+  license_name: string | null;
+  license_url: string | null;
+  gated: boolean;
+  /** Whether it can sing lyrics (music engines). */
+  lyrics: boolean;
+  /** Installed + weights + supported: a generation would be accepted now. */
+  ready: boolean;
+}
+
+/** Whether a Hugging Face token is available for gated downloads — never the token. */
+export interface HfTokenStatus {
+  configured: boolean;
+  /** "app": pasted into VoiceCraft. "huggingface": HF_TOKEN or a CLI login. */
+  source: "app" | "huggingface" | null;
 }
 
 export type DownloadState =
@@ -82,12 +142,15 @@ export interface DownloadJob {
   error: string | null;
 }
 
+export type LicenseTier = "open" | "conditional" | "noncommercial";
+
 export interface Model {
   id: string;
   repo_id: string;
   title: string;
   category: string;
-  engine: Engine;
+  /** Registry name of the engine that loads it — a speech, music or sfx engine. */
+  engine: string;
   summary: string;
   notes: string[];
   languages: string[];
@@ -101,6 +164,15 @@ export interface Model {
   engine_available: boolean;
   path: string | null;
   job: DownloadJob | null;
+  /** Tells entries that share one repository apart ("packed", "emb4"). */
+  variant: string | null;
+  /** Other entries in the same repository — deleting one removes them all. */
+  shared_with: string[];
+  optional_engine: boolean;
+  license_tier: LicenseTier;
+  license_name: string | null;
+  license_url: string | null;
+  gated: boolean;
 }
 
 export interface ModelCategory {
@@ -156,6 +228,19 @@ export interface Settings {
   gpu: GpuInfo;
   engines_loaded: string[];
   preferences: Preferences;
+}
+
+/** Live machine load for the sidebar's resource panel (all fields optional). */
+export interface Resources {
+  ram_used_bytes: number | null;
+  ram_total_bytes: number | null;
+  cpu_percent: number | null;
+  cpu_cores: number | null;
+  cpu_vendor: string | null;
+  gpu_name: string | null;
+  gpu_backend: string | null;
+  gpu_mem_used_bytes: number | null;
+  gpu_mem_total_bytes: number | null;
 }
 
 export interface CleanupResult {

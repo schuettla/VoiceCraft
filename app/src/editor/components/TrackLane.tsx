@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { EditorTrack, TimelineClip } from "../../lib/types";
-import { cx } from "../../components/ui";
+import { cx } from "../../components/common";
 import { useEditor } from "../store";
 import { useMedia } from "../MediaContext";
 import * as ops from "../ops";
@@ -76,13 +76,13 @@ export function TrackLane({
   }
 
   return (
-    <div className={cx("relative flex border-b border-ink-800", isActive && "bg-accent/[0.04]")} style={{ height }}>
+    <div className={cx("relative flex border-b border-ink-800", isActive && "bg-primary/[0.04]")} style={{ height }}>
       <div className="sticky left-0 z-20">
         <TrackHeader track={track} otherTracks={otherTracks} />
       </div>
       <div
         data-track-id={track.id}
-        className={cx("relative flex-1", dragOver && "bg-accent-soft/40")}
+        className={cx("relative flex-1", dragOver && "bg-primary/[0.06]")}
         onDragOver={onDragOver}
         onDragLeave={() => setDragOver(false)}
         onDrop={onDrop}

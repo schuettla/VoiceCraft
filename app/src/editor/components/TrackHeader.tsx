@@ -1,5 +1,5 @@
 import type { EditorTrack } from "../../lib/types";
-import { cx, IconButton } from "../../components/ui";
+import { cx, IconButton } from "../../components/common";
 import { TrashIcon } from "../../components/icons";
 import { useEditor } from "../store";
 import * as ops from "../ops";
@@ -32,7 +32,7 @@ export function TrackHeader({ track, otherTracks }: { track: EditorTrack; otherT
     <div
       className={cx(
         "flex h-full flex-col justify-center gap-1 border-r border-l-2 border-r-ink-700 px-2.5 py-1.5",
-        isActive ? "border-l-accent bg-accent/[0.07]" : "border-l-transparent bg-ink-900",
+        isActive ? "border-l-primary bg-primary/[0.07]" : "border-l-transparent bg-ink-900",
       )}
       style={{ width: HEADER_WIDTH }}
       onClick={() => editor.select({ clipIds: new Set(), trackId: track.id })}
@@ -48,6 +48,7 @@ export function TrackHeader({ track, otherTracks }: { track: EditorTrack; otherT
           )}
         />
         <IconButton
+          size="icon-xs"
           label="Delete track"
           className="hover:text-coral-red"
           onClick={() => editor.apply(ops.removeTrack(data, track.id))}
@@ -71,7 +72,7 @@ export function TrackHeader({ track, otherTracks }: { track: EditorTrack; otherT
           type="button"
           onClick={() => patch({ solo: !track.solo })}
           className={`grid size-5 shrink-0 place-items-center rounded text-[10px] font-medium transition ${
-            track.solo ? "bg-accent text-ink-950" : "bg-white/5 text-ink-400 hover:text-ink-200"
+            track.solo ? "bg-primary text-ink-950" : "bg-white/5 text-ink-400 hover:text-ink-200"
           }`}
           title="Solo"
         >
@@ -84,7 +85,7 @@ export function TrackHeader({ track, otherTracks }: { track: EditorTrack; otherT
           step={1}
           value={track.gain_db}
           onChange={(e) => patch({ gain_db: Number(e.target.value) }, `track:${track.id}:gain`)}
-          className="h-3 min-w-0 flex-1 accent-accent"
+          className="h-3 min-w-0 flex-1 accent-primary"
           title={`Gain ${track.gain_db} dB`}
         />
       </div>
@@ -104,7 +105,7 @@ export function TrackHeader({ track, otherTracks }: { track: EditorTrack; otherT
                 }),
               )
             }
-            className="size-3 accent-accent"
+            className="size-3 accent-primary"
           />
           duck under
           <select

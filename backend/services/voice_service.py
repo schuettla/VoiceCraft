@@ -11,8 +11,10 @@ and speech tokenizer once, and writes the result — the voice print — to
 has a real "ready" state, and problems surface next to the sample that caused
 them.
 
-Preset-voice engines (Kokoro) have nothing to extract; their profiles are
-marked `not_needed`.
+Preset-voice profiles (every Kokoro profile, and KittenTTS 2 profiles that pick
+one of its built-in voices) have nothing to extract; they are marked
+`not_needed`. KittenTTS 2 clones also need the sample's transcript, which
+`profile_service` insists on, so preparing one never triggers a Whisper download.
 """
 
 from __future__ import annotations
@@ -24,14 +26,13 @@ from pathlib import Path
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
-import catalog
 import config
 from backends import VoiceSpec, get_backend
 from database.models import Profile
 from database.session import session_scope
 from models import VoiceStatus
 from services import model_service
-from services.generation_service import submit
+from services.generation_service import release_other_engines, submit
 
 log = logging.getLogger(__name__)
 
@@ -72,17 +73,26 @@ def _can_run(engine: str) -> tuple[bool, str | None]:
     if not config.AUTO_PREPARE_VOICES:
         return False, None
     try:
-        repo_id = catalog.active_repo_id(engine)
+        downloaded = model_service.active_downloaded(engine)
     except KeyError:
         return True, None
-    if not model_service.is_downloaded(repo_id):
+    if not downloaded:
         return False, NO_WEIGHTS
     return True, None
 
 
+def is_clone(profile: Profile) -> bool:
+    """True when this profile's voice comes from a sample that needs analysing.
+
+    An engine that can clone isn't enough: KittenTTS 2 also has preset voices,
+    and a preset profile (no sample) has nothing to extract.
+    """
+    return get_backend(profile.engine).supports_cloning and bool(profile.sample_path)
+
+
 def needs_preparation(profile: Profile) -> bool:
     """True when this profile is a clone whose voice print isn't usable."""
-    if not get_backend(profile.engine).supports_cloning:
+    if not is_clone(profile):
         return False
     if profile.voice_status != VoiceStatus.ready.value:
         return True
@@ -91,8 +101,7 @@ def needs_preparation(profile: Profile) -> bool:
 
 def enqueue(session: Session, profile: Profile) -> Profile:
     """Queue extraction for `profile` and return it marked as pending."""
-    backend = get_backend(profile.engine)
-    if not backend.supports_cloning:
+    if not is_clone(profile):
         profile.voice_status = VoiceStatus.not_needed.value
         profile.voice_error = None
         session.commit()
@@ -137,8 +146,7 @@ def resume_pending() -> int:
     queued = 0
     with session_scope() as session:
         for profile in session.scalars(select(Profile)).all():
-            backend = get_backend(profile.engine)
-            if not backend.supports_cloning:
+            if not is_clone(profile):
                 if profile.voice_status != VoiceStatus.not_needed.value:
                     profile.voice_status = VoiceStatus.not_needed.value
                 continue
@@ -175,6 +183,7 @@ def _prepare_job(profile_id: str) -> None:
 
     _set(profile_id, voice_status=VoiceStatus.preparing.value)
     try:
+        release_other_engines(engine)
         result = get_backend(engine).prepare_voice(voice, out_path)
         _set(
             profile_id,

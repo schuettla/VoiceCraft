@@ -3,6 +3,7 @@ import { api } from "../lib/api";
 import type { Project, ProjectSummary } from "../lib/types";
 import { useToast } from "../components/Toaster";
 import { SpinnerIcon } from "../components/icons";
+import { useConfirm } from "../components/Confirm";
 import { MediaProvider } from "../editor/MediaContext";
 import { EditorProvider } from "../editor/store";
 import { EngineProvider } from "../editor/EngineContext";
@@ -26,6 +27,7 @@ import { ProjectDialog } from "../editor/components/ProjectDialog";
 
 export function EditPage() {
   const toast = useToast();
+  const confirm = useConfirm();
   const [summaries, setSummaries] = useState<ProjectSummary[]>([]);
   const [project, setProject] = useState<Project | null>(null);
   const [loading, setLoading] = useState(true);
@@ -90,7 +92,13 @@ export function EditPage() {
 
   async function deleteProjectById(id: string) {
     const target = summaries.find((s) => s.id === id);
-    if (!window.confirm(`Delete project "${target?.name ?? "this project"}"? Its rendered exports are kept.`)) return;
+    const ok = await confirm({
+      title: `Delete “${target?.name ?? "this project"}”?`,
+      description: "The project is removed. Its rendered exports are kept.",
+      confirmLabel: "Delete project",
+      destructive: true,
+    });
+    if (!ok) return;
     try {
       await api.deleteProject(id);
       if (id === project?.id) await bootstrap();
@@ -102,7 +110,7 @@ export function EditPage() {
 
   if (loading || !project) {
     return (
-      <div className="flex h-[70vh] items-center justify-center gap-2 text-ink-400">
+      <div className="flex h-full items-center justify-center gap-2 text-muted-foreground">
         <SpinnerIcon /> Loading editor…
       </div>
     );
@@ -119,7 +127,7 @@ export function EditPage() {
         >
           <EngineProvider>
             <KeyboardShortcuts />
-            <div className="flex min-h-0 flex-1 flex-col overflow-hidden border border-ink-700">
+            <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
               <Toolbar
                 onOpenProjects={() => setShowProjects(true)}
                 mediaOpen={mediaOpen}

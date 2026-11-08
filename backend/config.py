@@ -60,6 +60,9 @@ EDITS_DIR = DATA_DIR / "edits"           # trim/assemble/convert/render results
 TMP_DIR = DATA_DIR / "tmp"               # ffmpeg intermediates
 PEAKS_DIR = DATA_DIR / "peaks"           # cached waveform peak data (regenerable)
 DB_PATH = DATA_DIR / "voicecraft.db"
+# Credentials the user typed in (the Hugging Face token for gated downloads).
+# Deliberately not in ALL_DIRS: nothing lists, serves or cleans this folder.
+SECRETS_DIR = DATA_DIR / "secrets"
 
 ALL_DIRS = (
     SAMPLES_DIR, VOICES_DIR, GENERATIONS_DIR, ASSETS_DIR, EDITS_DIR, TMP_DIR,
@@ -175,22 +178,9 @@ def apply_models_dir_env(directory: Path | None = None) -> None:
     os.environ.setdefault("HF_HOME", str(resolved.parent))
 
 
-def qwen_model_id() -> str:
-    """Active Qwen checkpoint: env override, then the user's choice, then default."""
-    return (
-        os.environ.get("VOICECRAFT_QWEN_MODEL")
-        or load_settings().get("qwen_model")
-        or DEFAULT_QWEN_MODEL_ID
-    )
-
-
-def kokoro_model_id() -> str:
-    return (
-        os.environ.get("VOICECRAFT_KOKORO_MODEL")
-        or load_settings().get("kokoro_model")
-        or DEFAULT_KOKORO_MODEL_ID
-    )
-
+# Which checkpoint an engine loads is resolved in `catalog.active_repo_id`: the
+# choice is stored by model id (two catalog entries can share one repo), and the
+# VOICECRAFT_QWEN_MODEL / VOICECRAFT_KOKORO_MODEL overrides are read there too.
 
 apply_models_dir_env()
 

@@ -1,5 +1,16 @@
 import { useState } from "react";
-import { Badge, Button, cx, IconButton } from "../../components/ui";
+import { Redo2, Undo2 } from "lucide-react";
+import { Badge, IconButton, cx } from "../../components/common";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Separator } from "@/components/ui/separator";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { FolderIcon, PlusIcon, SidebarIcon, TrashIcon } from "../../components/icons";
 import { useEditor } from "../store";
 import { useLayout } from "../useLayout";
@@ -16,6 +27,13 @@ const SAVE_LABEL: Record<string, string> = {
   error: "Couldn't save",
 };
 
+const TRACK_KINDS: { value: TrackKind; label: string }[] = [
+  { value: "voice", label: "Voice" },
+  { value: "music", label: "Music" },
+  { value: "sfx", label: "SFX" },
+  { value: "other", label: "Other" },
+];
+
 export function Toolbar({
   onOpenProjects,
   mediaOpen,
@@ -28,7 +46,6 @@ export function Toolbar({
   const editor = useEditor();
   const { durations, layout } = useLayout();
   const data = editor.state.data;
-  const [addingTrack, setAddingTrack] = useState(false);
   const [showExport, setShowExport] = useState(false);
   const [showSilence, setShowSilence] = useState(false);
   const [showLoudness, setShowLoudness] = useState(false);
@@ -55,73 +72,68 @@ export function Toolbar({
     editor.selectRange(null);
   }
 
-  function insertSilence() {
-    const raw = window.prompt("Insert how many seconds of silence at the playhead?", "1");
-    const seconds = raw ? Number(raw) : NaN;
+  function insertSilence(seconds: number) {
     if (!Number.isFinite(seconds) || seconds <= 0) return;
     editor.apply(ops.insertSilence(data, editor.state.playhead - layout.bodyOffset, seconds, range?.trackIds));
   }
 
   return (
-    <div className="flex flex-wrap items-center gap-2 border-b border-ink-700 bg-ink-900 px-3 py-2">
+    <div className="flex flex-wrap items-center gap-1.5 border-b bg-card px-3 py-2">
       <IconButton label="Projects" onClick={onOpenProjects}>
         <FolderIcon />
       </IconButton>
-      <input
+      <Input
         value={editor.state.projectName}
         onChange={(e) => editor.rename(e.target.value)}
-        className="min-w-0 max-w-[220px] flex-1 truncate bg-transparent text-[14px] font-medium text-white focus:outline-none"
+        aria-label="Project name"
+        className="h-8 max-w-[220px] min-w-0 flex-1 border-transparent bg-transparent px-2 font-medium text-white shadow-none hover:border-input focus-visible:bg-transparent dark:bg-transparent"
       />
-      <Badge tone={editor.state.saveState === "error" ? "bad" : "neutral"}>
+      <Badge tone={editor.state.saveState === "error" ? "bad" : "neutral"} className={cx(!SAVE_LABEL[editor.state.saveState] && "hidden")}>
         {SAVE_LABEL[editor.state.saveState]}
       </Badge>
 
-      <div className="mx-1 h-5 w-px bg-ink-700" />
+      <Separator orientation="vertical" className="mx-1 data-[orientation=vertical]:h-5" />
 
       <IconButton
         label={mediaOpen ? "Hide media panel" : "Show media panel"}
-        className={cx(mediaOpen && "bg-white/10 text-white")}
+        className={cx(mediaOpen && "bg-accent text-foreground")}
         onClick={onToggleMedia}
       >
         <SidebarIcon />
       </IconButton>
 
-      <div className="mx-1 h-5 w-px bg-ink-700" />
+      <Separator orientation="vertical" className="mx-1 data-[orientation=vertical]:h-5" />
 
       <IconButton label="Undo" disabled={!editor.canUndo} onClick={editor.undo}>
-        <UndoIcon />
+        <Undo2 />
       </IconButton>
       <IconButton label="Redo" disabled={!editor.canRedo} onClick={editor.redo}>
-        <RedoIcon />
+        <Redo2 />
       </IconButton>
 
-      <div className="mx-1 h-5 w-px bg-ink-700" />
+      <Separator orientation="vertical" className="mx-1 data-[orientation=vertical]:h-5" />
 
-      {addingTrack ? (
-        <select
-          autoFocus
-          value=""
-          onBlur={() => setAddingTrack(false)}
-          onChange={(e) => {
-            editor.apply(ops.addTrack(data, e.target.value as TrackKind));
-            setAddingTrack(false);
-          }}
-          className="rounded-md border border-ink-700 bg-ink-900 px-2 py-1 text-[12px] text-ink-200"
-        >
-          <option value="">Kind…</option>
-          <option value="voice">Voice</option>
-          <option value="music">Music</option>
-          <option value="sfx">SFX</option>
-          <option value="other">Other</option>
-        </select>
-      ) : (
-        <Button size="sm" onClick={() => setAddingTrack(true)}>
-          <PlusIcon /> Track
-        </Button>
-      )}
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button size="sm" variant="ghost">
+            <PlusIcon /> Track
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="start">
+          {TRACK_KINDS.map((kind) => (
+            <DropdownMenuItem
+              key={kind.value}
+              onSelect={() => editor.apply(ops.addTrack(data, kind.value))}
+            >
+              {kind.label}
+            </DropdownMenuItem>
+          ))}
+        </DropdownMenuContent>
+      </DropdownMenu>
 
       <Button
         size="sm"
+        variant="ghost"
         disabled={!selectedClipId}
         onClick={() => setShowSilence(true)}
         title="Detect and remove long quiet stretches"
@@ -143,23 +155,21 @@ export function Toolbar({
         <TrashIcon />
       </IconButton>
 
-      <div className="mx-1 h-5 w-px bg-ink-700" />
+      <Separator orientation="vertical" className="mx-1 data-[orientation=vertical]:h-5" />
 
-      <Button size="sm" disabled={!range} onClick={deleteRange} title="Delete the selected range, leaving a gap">
+      <Button size="sm" variant="ghost" disabled={!range} onClick={deleteRange} title="Delete the selected range, leaving a gap">
         Delete range
       </Button>
-      <Button size="sm" disabled={!range} onClick={rippleDeleteRange} title="Delete the selected range and close the gap">
+      <Button size="sm" variant="ghost" disabled={!range} onClick={rippleDeleteRange} title="Delete the selected range and close the gap">
         Ripple delete
       </Button>
-      <Button size="sm" onClick={insertSilence} title="Open a gap at the playhead">
-        Insert silence
-      </Button>
-      <Button size="sm" onClick={() => setShowLoudness(true)}>
+      <InsertSilence onInsert={insertSilence} />
+      <Button size="sm" variant="ghost" onClick={() => setShowLoudness(true)}>
         Loudness
       </Button>
 
       <div className="ml-auto flex items-center gap-2">
-        <Button size="sm" variant="primary" onClick={() => setShowExport(true)}>
+        <Button size="sm" onClick={() => setShowExport(true)}>
           Export
         </Button>
       </div>
@@ -171,18 +181,44 @@ export function Toolbar({
   );
 }
 
-function UndoIcon() {
-  return (
-    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M4 6h6.5a3.5 3.5 0 0 1 0 7H8M4 6l3-3M4 6l3 3" />
-    </svg>
-  );
-}
+/** Opens a gap at the playhead — a popover instead of the old `window.prompt`. */
+function InsertSilence({ onInsert }: { onInsert: (seconds: number) => void }) {
+  const [open, setOpen] = useState(false);
+  const [value, setValue] = useState("1");
 
-function RedoIcon() {
+  function submit(event: React.FormEvent) {
+    event.preventDefault();
+    onInsert(Number(value));
+    setOpen(false);
+  }
+
   return (
-    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M12 6H5.5a3.5 3.5 0 0 0 0 7H8M12 6l-3-3M12 6l-3 3" />
-    </svg>
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button size="sm" variant="ghost" title="Open a gap at the playhead">
+          Insert silence
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent align="start" className="w-64">
+        <form onSubmit={submit} className="space-y-3">
+          <p className="text-[13px] text-muted-foreground">
+            Seconds of silence to insert at the playhead
+          </p>
+          <div className="flex gap-2">
+            <Input
+              autoFocus
+              type="number"
+              min={0.1}
+              step={0.1}
+              value={value}
+              onChange={(e) => setValue(e.target.value)}
+            />
+            <Button type="submit" disabled={!(Number(value) > 0)}>
+              Insert
+            </Button>
+          </div>
+        </form>
+      </PopoverContent>
+    </Popover>
   );
 }

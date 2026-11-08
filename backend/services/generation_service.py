@@ -8,7 +8,11 @@ history — including failures — survives an app restart (FR5).
 from __future__ import annotations
 
 import datetime as dt
+import json
 import logging
+import os
+import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -16,7 +20,14 @@ from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 import config
-from backends import VoiceSpec, get_backend
+from backends import (
+    AudioSpec,
+    VoiceSpec,
+    all_backends,
+    get_backend,
+    unload_all,
+    unload_except,
+)
 from database.models import Generation, Profile
 from database.session import session_scope
 from models import GenerateRequest, GenerationStatus
@@ -27,6 +38,75 @@ log = logging.getLogger(__name__)
 
 _executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="tts")
 
+# --------------------------------------------------------------------------
+# GPU scheduling
+# --------------------------------------------------------------------------
+#
+# One job runs at a time, and a job only ever needs one engine, so:
+#   * before a job, every *other* loaded engine is unloaded — Qwen3-TTS and
+#     Kitten (and later the music / SFX models) must not share 6 GB of VRAM;
+#   * once nothing has run for IDLE_UNLOAD_SECONDS, the loaded engine is
+#     unloaded too, so an open-but-idle app doesn't hold the GPU. 0 disables it.
+
+IDLE_UNLOAD_SECONDS = float(os.environ.get("VOICECRAFT_IDLE_UNLOAD_SECONDS", "600"))
+
+_state_lock = threading.Lock()
+_pending = 0                       # jobs submitted and not yet finished
+_last_activity = time.monotonic()
+_watcher_stop = threading.Event()
+_watcher: threading.Thread | None = None
+
+
+def release_other_engines(engine: str) -> None:
+    """Unload every loaded engine except `engine` (call at the start of a job)."""
+    dropped = unload_except(engine)
+    if dropped:
+        log.info("unloaded %s to make room for %s", ", ".join(dropped), engine)
+
+
+def _tracked(fn, args) -> None:
+    global _pending, _last_activity
+    try:
+        fn(*args)
+    finally:
+        with _state_lock:
+            _pending -= 1
+            _last_activity = time.monotonic()
+
+
+def _idle_check() -> bool:
+    """Unload everything if the worker has been idle long enough. True if it did."""
+    # The lock is held across the unload: `submit` takes it to count a new job,
+    # so a job can't be queued while the models it needs are being torn down.
+    if IDLE_UNLOAD_SECONDS <= 0:
+        return False
+    with _state_lock:
+        if _pending or time.monotonic() - _last_activity < IDLE_UNLOAD_SECONDS:
+            return False
+        if not any(backend.is_loaded() for backend in all_backends().values()):
+            return False
+        log.info("idle for %.0fs — unloading models", IDLE_UNLOAD_SECONDS)
+        unload_all()
+        return True
+
+
+def _watch_idle() -> None:
+    interval = min(30.0, max(0.5, IDLE_UNLOAD_SECONDS / 4))
+    while not _watcher_stop.wait(interval):
+        try:
+            _idle_check()
+        except Exception:  # noqa: BLE001 - the watcher must outlive a bad unload
+            log.warning("idle unload failed", exc_info=True)
+
+
+def _ensure_watcher() -> None:
+    global _watcher
+    if IDLE_UNLOAD_SECONDS <= 0 or (_watcher and _watcher.is_alive()):
+        return
+    _watcher_stop.clear()
+    _watcher = threading.Thread(target=_watch_idle, name="idle-unload", daemon=True)
+    _watcher.start()
+
 
 def submit(fn, *args) -> None:
     """Queue GPU work on the one worker thread.
@@ -36,19 +116,29 @@ def submit(fn, *args) -> None:
     means a generation submitted right after a profile is created waits for
     that profile's voice print, which is exactly the order the user wants.
     """
-    _executor.submit(fn, *args)
+    global _pending
+    with _state_lock:
+        _pending += 1
+    _ensure_watcher()
+    _executor.submit(_tracked, fn, args)
 
 
 class GenerationError(ValueError):
-    pass
+    """The request is wrong (HTTP 400)."""
 
 
-def list_generations(session: Session, limit: int = 100) -> list[Generation]:
-    return list(
-        session.scalars(
-            select(Generation).order_by(Generation.created_at.desc()).limit(limit)
-        ).all()
-    )
+class EngineNotReady(GenerationError):
+    """The request is fine, but the engine can't take it yet (HTTP 409):
+    not installed, weights missing, or not runnable on this hardware."""
+
+
+def list_generations(
+    session: Session, limit: int = 100, kind: str | None = None
+) -> list[Generation]:
+    query = select(Generation).order_by(Generation.created_at.desc())
+    if kind:
+        query = query.where(Generation.kind == kind)
+    return list(session.scalars(query.limit(limit)).all())
 
 
 def get_generation(session: Session, generation_id: str) -> Generation | None:
@@ -82,8 +172,20 @@ def enqueue(session: Session, request: GenerateRequest) -> Generation:
     if profile is None:
         raise GenerationError("profile not found")
 
+    # Options only some engines understand live in `params`, so the column set
+    # never changes when an engine gains a knob. Today that is KittenTTS 2.
+    options: dict = {}
+    if profile.engine == "kitten":
+        if request.preset:
+            options["preset"] = request.preset
+        if request.seed is not None:
+            options["seed"] = request.seed
+
     generation = Generation(
         profile_id=profile.id,
+        kind="speech",
+        engine=profile.engine,
+        params=json.dumps(options) if options else None,
         text=request.text,
         status=GenerationStatus.queued.value,
     )
@@ -98,6 +200,7 @@ def enqueue(session: Session, request: GenerateRequest) -> Generation:
         preset_voice=profile.preset_voice,
         speed=request.speed,
         voice_path=profile.voice_path,
+        options=options,
     )
     out_path = unique_path(
         config.GENERATIONS_DIR,
@@ -122,7 +225,31 @@ def _run_job(
     out_path: Path,
     text: str,
 ) -> None:
+    _execute(
+        generation_id, engine, out_path,
+        lambda backend, raw_path: backend.synthesize(text, voice, raw_path),
+    )
+
+
+def run_audio_job(
+    generation_id: str, engine: str, spec: AudioSpec, out_path: Path
+) -> None:
+    """A music / SFX job: same queue, same status writes, a different engine call."""
+    _execute(
+        generation_id, engine, out_path,
+        lambda backend, raw_path: backend.generate(spec, raw_path),
+    )
+
+
+def _execute(generation_id: str, engine: str, out_path: Path, produce) -> None:
+    """Run one job on the worker: `produce(backend, wav_path)` makes the audio.
+
+    Everything around the engine call — the unload-before-job rule, the status
+    transitions, the ffmpeg transcode and the failure record — is the same for
+    speech and for music / SFX, so it lives here once.
+    """
     _set_status(generation_id, status=GenerationStatus.processing.value)
+    release_other_engines(engine)
     # The engines only write WAV, so a request for anything else synthesizes to
     # a WAV beside the target and hands it to ffmpeg. The intermediate is
     # deleted, so the user is left with exactly the file they asked for.
@@ -130,7 +257,7 @@ def _run_job(
     raw_path = out_path if wanted == "wav" else out_path.with_suffix(".raw.wav")
     try:
         backend = get_backend(engine)
-        result = backend.synthesize(text, voice, raw_path)
+        result = produce(backend, raw_path)
         final = Path(result.path)
         if wanted != "wav":
             audio.convert(final, out_path)
@@ -172,4 +299,5 @@ def delete_generation(session: Session, generation_id: str) -> bool:
 
 
 def shutdown() -> None:
+    _watcher_stop.set()
     _executor.shutdown(wait=False, cancel_futures=True)

@@ -1,6 +1,8 @@
 import { useMemo, useRef } from "react";
 import { formatDuration } from "../../lib/format";
-import { cx, IconButton } from "../../components/ui";
+import { cx, IconButton } from "../../components/common";
+import { Separator } from "@/components/ui/separator";
+import { Slider } from "@/components/ui/slider";
 import { LoopIcon, MagnetIcon, MarkerIcon, ScissorsIcon, ZoomInIcon, ZoomOutIcon } from "../../components/icons";
 import { useEditor } from "../store";
 import { useMedia } from "../MediaContext";
@@ -112,9 +114,10 @@ export function Timeline() {
   const { intro, outro } = data;
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col overflow-hidden border border-ink-700 bg-ink-950">
-      <div className="flex items-center gap-1 border-b border-ink-700 bg-ink-900 px-2 py-1">
+    <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border bg-ink-950">
+      <div className="flex items-center gap-1 border-b bg-card px-2 py-1.5">
         <IconButton
+          size="icon-xs"
           label="Razor tool — click a clip to split it"
           className={cx(editor.state.tool === "razor" && "bg-white/10 text-white")}
           onClick={() => editor.setTool(editor.state.tool === "razor" ? "select" : "razor")}
@@ -122,6 +125,7 @@ export function Timeline() {
           <ScissorsIcon />
         </IconButton>
         <IconButton
+          size="icon-xs"
           label={editor.state.snapEnabled ? "Snapping on" : "Snapping off"}
           className={cx(editor.state.snapEnabled && "bg-white/10 text-white")}
           onClick={() => editor.setSnap(!editor.state.snapEnabled)}
@@ -129,32 +133,33 @@ export function Timeline() {
           <MagnetIcon />
         </IconButton>
         <IconButton
+          size="icon-xs"
           label={loop ? "Clear loop" : "Loop the selected range"}
           disabled={!loop && !range}
-          className={cx(loop && "bg-white/10 text-accent")}
+          className={cx(loop && "bg-white/10 text-primary")}
           onClick={() => editor.setLoop(loop ? null : range ? { start: range.start, end: range.end } : null)}
         >
           <LoopIcon />
         </IconButton>
-        <IconButton label="Add marker at playhead" onClick={() => editor.apply(ops.addMarker(data, editor.state.playhead))}>
+        <IconButton size="icon-xs" label="Add marker at playhead" onClick={() => editor.apply(ops.addMarker(data, editor.state.playhead))}>
           <MarkerIcon />
         </IconButton>
 
-        <div className="mx-1 h-5 w-px bg-ink-700" />
+        <Separator orientation="vertical" className="mx-1 data-[orientation=vertical]:h-4" />
 
-        <IconButton label="Zoom out" onClick={() => editor.setZoom((z) => Math.max(MIN_ZOOM, z / 1.4))}>
+        <IconButton size="icon-xs" label="Zoom out" onClick={() => editor.setZoom((z) => Math.max(MIN_ZOOM, z / 1.4))}>
           <ZoomOutIcon />
         </IconButton>
-        <input
-          type="range"
+        <Slider
           min={MIN_ZOOM}
           max={MAX_ZOOM}
-          value={zoom}
-          onChange={(e) => editor.setZoom(Number(e.target.value))}
-          className="h-3 w-20 accent-accent"
+          step={1}
+          value={[zoom]}
+          onValueChange={([next]) => editor.setZoom(next)}
+          className="w-24"
           aria-label="Zoom"
         />
-        <IconButton label="Zoom in" onClick={() => editor.setZoom((z) => Math.min(MAX_ZOOM, z * 1.4))}>
+        <IconButton size="icon-xs" label="Zoom in" onClick={() => editor.setZoom((z) => Math.min(MAX_ZOOM, z * 1.4))}>
           <ZoomInIcon />
         </IconButton>
         {!intro.asset_id && (
@@ -221,7 +226,7 @@ export function Timeline() {
           {/* range selection */}
           {range && (
             <div
-              className="pointer-events-none absolute z-10 bg-accent/10 outline outline-1 outline-accent/40"
+              className="pointer-events-none absolute z-10 bg-primary/10 outline outline-1 outline-primary/40"
               style={{
                 left: HEADER_WIDTH + range.start * zoom,
                 width: Math.max(1, (range.end - range.start) * zoom),
@@ -282,7 +287,7 @@ export function Timeline() {
 
           {/* playhead */}
           <div
-            className="pointer-events-none absolute top-0 z-20 w-px bg-accent"
+            className="pointer-events-none absolute top-0 z-20 w-px bg-primary"
             style={{ left: HEADER_WIDTH + editor.state.playhead * zoom, height: contentHeight }}
           />
         </div>

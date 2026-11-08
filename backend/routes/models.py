@@ -8,11 +8,31 @@ import sys
 from fastapi import APIRouter, HTTPException
 
 import config
-from models import ModelsOut, StorageRequest
-from services import model_service
+from models import HfTokenRequest, HfTokenStatus, ModelsOut, StorageRequest
+from services import hf_token, model_service
 from services.model_service import ModelError
 
 router = APIRouter(prefix="/api/models", tags=["models"])
+
+
+# Declared before the `/{model_id}/…` routes so "hf-token" is never read as an id.
+@router.get("/hf-token", response_model=HfTokenStatus)
+def token_status() -> HfTokenStatus:
+    """Whether a Hugging Face token is available for gated downloads. Never the token."""
+    return HfTokenStatus(**hf_token.status())
+
+
+@router.put("/hf-token", response_model=HfTokenStatus)
+def save_token(request: HfTokenRequest) -> HfTokenStatus:
+    try:
+        return HfTokenStatus(**hf_token.save(request.token))
+    except hf_token.TokenError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.delete("/hf-token", response_model=HfTokenStatus)
+def clear_token() -> HfTokenStatus:
+    return HfTokenStatus(**hf_token.clear())
 
 
 @router.get("", response_model=ModelsOut)

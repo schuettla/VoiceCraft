@@ -11,7 +11,9 @@ import {
 import { fileUrl } from "../lib/api";
 import { formatDuration } from "../lib/format";
 import { PlayIcon, PauseIcon, XIcon } from "./icons";
-import { cx } from "./ui";
+import { IconButton } from "./common";
+import { Button } from "@/components/ui/button";
+import { Slider } from "@/components/ui/slider";
 
 /* One <audio> element for the whole app.
  *
@@ -142,91 +144,54 @@ export function AudioProvider({ children }: { children: ReactNode }) {
   );
 
   return (
-    <AudioCtx.Provider value={value}>
-      {children}
-      <PlayerBar />
-    </AudioCtx.Provider>
+    <AudioCtx.Provider value={value}>{children}</AudioCtx.Provider>
   );
 }
 
-function PlayerBar() {
+
+/** The persistent player. Lives in the shell's layout flow (not fixed over the
+ * content), so pages never need bottom padding to clear it. */
+export function PlayerDock() {
   const { track, playing, time, duration, toggle, seek, stop } = useAudio();
   if (!track) return null;
 
-  const pct = duration > 0 ? (time / duration) * 100 : 0;
-
   return (
-    <div className="fixed inset-x-0 bottom-0 z-40 border-t border-ink-700 bg-ink-900/95 backdrop-blur">
-      <div className="mx-auto flex max-w-6xl items-center gap-4 px-5 py-2.5">
-        <button
-          onClick={toggle}
-          className="grid size-9 shrink-0 place-items-center rounded-md bg-accent text-ink-950 transition hover:bg-accent-strong"
-          aria-label={playing ? "Pause" : "Play"}
-        >
-          {playing ? <PauseIcon /> : <PlayIcon />}
-        </button>
+    <div className="flex shrink-0 items-center gap-4 border-t bg-card px-5 py-2.5">
+      <Button
+        size="icon"
+        className="size-8 shrink-0 rounded-full"
+        onClick={toggle}
+        aria-label={playing ? "Pause" : "Play"}
+      >
+        {playing ? <PauseIcon /> : <PlayIcon />}
+      </Button>
 
-        <div className="min-w-0 flex-1">
-          <div className="flex items-baseline justify-between gap-3">
-            <p className="truncate text-[13px] text-ink-200">{track.title}</p>
-            <span className="shrink-0 font-mono text-[11px] tabular-nums text-ink-400">
-              {formatDuration(time)} / {formatDuration(duration)}
-            </span>
-          </div>
-          <Scrubber pct={pct} duration={duration} onSeek={seek} />
-          {track.subtitle && (
-            <p className="mt-0.5 truncate text-[11px] text-ink-400">
-              {track.subtitle}
-            </p>
-          )}
-        </div>
-
-        <button
-          onClick={stop}
-          className="grid size-7 shrink-0 place-items-center rounded-md text-ink-400 transition hover:bg-white/5 hover:text-ink-100"
-          aria-label="Close player"
-        >
-          <XIcon />
-        </button>
+      <div className="min-w-0 basis-56">
+        <p className="truncate text-[13px] font-medium text-foreground">{track.title}</p>
+        {track.subtitle && (
+          <p className="truncate text-xs text-muted-foreground">{track.subtitle}</p>
+        )}
       </div>
-    </div>
-  );
-}
 
-function Scrubber({
-  pct,
-  duration,
-  onSeek,
-}: {
-  pct: number;
-  duration: number;
-  onSeek: (seconds: number) => void;
-}) {
-  function handle(event: React.MouseEvent<HTMLDivElement>) {
-    if (duration <= 0) return;
-    const rect = event.currentTarget.getBoundingClientRect();
-    const ratio = Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width));
-    onSeek(ratio * duration);
-  }
-  return (
-    <div
-      onClick={handle}
-      className="group mt-1 h-2.5 cursor-pointer"
-      role="slider"
-      aria-valuenow={Math.round(pct)}
-      aria-valuemin={0}
-      aria-valuemax={100}
-      tabIndex={0}
-    >
-      <div className="relative top-1 h-1 rounded-full bg-ink-700">
-        <div
-          className={cx(
-            "absolute inset-y-0 left-0 rounded-full bg-ink-300 transition-[width] duration-150",
-            "group-hover:bg-accent",
-          )}
-          style={{ width: `${pct}%` }}
-        />
-      </div>
+      <span className="w-10 shrink-0 text-right font-mono text-[11px] tabular-nums text-muted-foreground">
+        {formatDuration(time)}
+      </span>
+      <Slider
+        className="min-w-0 flex-1"
+        value={[Math.min(time, duration || 0)]}
+        max={duration > 0 ? duration : 1}
+        step={0.05}
+        disabled={duration <= 0}
+        onValueChange={([next]) => seek(next)}
+        aria-label="Seek"
+      />
+      <span className="w-10 shrink-0 font-mono text-[11px] tabular-nums text-muted-foreground">
+        {formatDuration(duration)}
+      </span>
+
+      <IconButton label="Close player" onClick={stop}>
+        <XIcon />
+      </IconButton>
     </div>
   );
 }

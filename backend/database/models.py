@@ -70,6 +70,14 @@ class Generation(Base):
     profile_id: Mapped[str | None] = mapped_column(
         ForeignKey("profiles.id", ondelete="SET NULL"), nullable=True
     )
+    # speech | music | sfx. `text` is the script (speech), the style prompt
+    # (music) or the description (sfx).
+    kind: Mapped[str] = mapped_column(String(8), nullable=False, default="speech")
+    # qwen | kokoro | kitten | acestep | moss_sfx | … Rows from before this
+    # column existed are null and resolve through their profile.
+    engine: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    # Per-generation options as JSON: Kitten preset/seed, music lyrics/steps/…
+    params: Mapped[str | None] = mapped_column(Text, nullable=True)
     text: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="queued")
     audio_path: Mapped[str | None] = mapped_column(Text, nullable=True)

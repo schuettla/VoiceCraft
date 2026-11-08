@@ -8,6 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 import config
+from backends import kitten_backend
 from backends.kokoro_backend import PRESET_VOICES
 from database.models import Profile
 from models import Engine, ProfileCreate, VoiceStatus
@@ -18,6 +19,20 @@ from utils.paths import slugify, unique_path
 
 class ProfileError(ValueError):
     """Invalid profile input — surfaced to the client as a 400."""
+
+
+def _clones(engine: Engine, sample_bytes: bytes | None) -> bool:
+    """Whether a new profile of `engine` is a clone rather than a preset voice."""
+    if engine == Engine.qwen:
+        return True
+    return engine == Engine.kitten and bool(sample_bytes)
+
+
+def _check_preset(voice: str | None, allowed, engine_name: str) -> None:
+    if not voice:
+        raise ProfileError(f"{engine_name} profiles need a preset voice id.")
+    if voice not in allowed:
+        raise ProfileError(f"unknown {engine_name} voice: {voice}")
 
 
 def list_profiles(session: Session) -> list[Profile]:
@@ -39,13 +54,35 @@ def create_profile(
     """Create a profile, storing the reference sample if one was uploaded.
 
     Qwen clones from a sample; Kokoro selects a preset voice and rejects one
-    (PRD §5). Enforcing that here keeps generation from failing later with a
-    confusing error.
+    (PRD §5). KittenTTS 2 does either, never both: a clone (sample plus the
+    transcript of what it says) or one of its preset voices. Enforcing that
+    here keeps generation from failing later with a confusing error.
     """
     sample_path: Path | None = None
+    clones = _clones(data.engine, sample_bytes)
+    transcript = (data.sample_text or "").strip() or None
 
-    if data.engine == Engine.qwen:
-        if not sample_bytes:
+    if data.engine == Engine.kitten:
+        if sample_bytes and data.preset_voice:
+            raise ProfileError(
+                "A KittenTTS 2 profile is either a clone (sample + transcript) "
+                "or a preset voice, not both."
+            )
+        if clones:
+            if not transcript:
+                # Without it kittenml downloads Whisper large-v3 (~3 GB) to
+                # transcribe the clip: a hidden download we refuse to cause.
+                raise ProfileError(
+                    "KittenTTS 2 needs the transcript of the reference sample "
+                    "(what the clip says, 5–30 s of a single speaker)."
+                )
+        else:
+            _check_preset(
+                data.preset_voice, kitten_backend.preset_voices(), "KittenTTS 2"
+            )
+
+    if clones:
+        if data.engine == Engine.qwen and not sample_bytes:
             raise ProfileError(
                 "Qwen3-TTS profiles need a reference audio sample (10–30s works well)."
             )
@@ -60,27 +97,22 @@ def create_profile(
             raise ProfileError(
                 "That file could not be read as audio. Use WAV, MP3, FLAC, or OGG."
             )
-    else:
+    elif data.engine == Engine.kokoro:
         if sample_bytes:
             raise ProfileError(
                 "Kokoro cannot clone a voice. Choose one of its preset voices instead."
             )
-        if not data.preset_voice:
-            raise ProfileError("Kokoro profiles need a preset voice id.")
-        if data.preset_voice not in PRESET_VOICES:
-            raise ProfileError(f"unknown Kokoro voice: {data.preset_voice}")
+        _check_preset(data.preset_voice, PRESET_VOICES, "Kokoro")
 
     profile = Profile(
         name=data.name.strip(),
         engine=data.engine.value,
         language=data.language or "en",
         sample_path=str(sample_path) if sample_path else None,
-        sample_text=(data.sample_text or None) if data.engine == Engine.qwen else None,
-        preset_voice=data.preset_voice if data.engine == Engine.kokoro else None,
+        sample_text=transcript if clones else None,
+        preset_voice=None if clones else data.preset_voice,
         voice_status=(
-            VoiceStatus.pending.value
-            if data.engine == Engine.qwen
-            else VoiceStatus.not_needed.value
+            VoiceStatus.pending.value if clones else VoiceStatus.not_needed.value
         ),
     )
     session.add(profile)

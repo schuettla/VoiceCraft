@@ -6,9 +6,9 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from database.session import get_session
-from models import GenerateRequest, GenerationOut
-from services import generation_service
-from services.generation_service import GenerationError
+from models import AudioGenerateRequest, GenerateRequest, GenerationKind, GenerationOut
+from services import audio_service, generation_service
+from services.generation_service import EngineNotReady, GenerationError
 
 router = APIRouter(prefix="/api/generations", tags=["generations"])
 
@@ -16,9 +16,29 @@ router = APIRouter(prefix="/api/generations", tags=["generations"])
 @router.get("", response_model=list[GenerationOut])
 def list_generations(
     limit: int = Query(default=100, ge=1, le=500),
+    kind: GenerationKind | None = Query(default=None),
     session: Session = Depends(get_session),
 ) -> list[GenerationOut]:
-    return generation_service.list_generations(session, limit=limit)
+    """Newest first. `?kind=speech|music|sfx` narrows it to one type."""
+    return generation_service.list_generations(session, limit=limit, kind=kind)
+
+
+@router.post("/audio", response_model=list[GenerationOut], status_code=202)
+def create_audio_generation(
+    request: AudioGenerateRequest, session: Session = Depends(get_session)
+) -> list[GenerationOut]:
+    """Queue a music or sound-effect job.
+
+    Returns the `queued` rows — one, or `takes` of them for sound effects — for
+    the client to poll. 400 means the request is wrong, 409 that the engine
+    isn't ready (not installed, no weights, unsupported hardware).
+    """
+    try:
+        return audio_service.enqueue(session, request)
+    except EngineNotReady as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except GenerationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post("", response_model=GenerationOut, status_code=202)

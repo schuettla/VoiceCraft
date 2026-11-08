@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { LoudnessReport } from "../../lib/types";
-import { Button, Field, Select } from "../../components/ui";
+import { Field, OptionSelect } from "../../components/common";
+import { Button } from "@/components/ui/button";
 import { Dialog } from "../../components/Dialog";
 import { api } from "../../lib/api";
 import { useToast } from "../../components/Toaster";
@@ -35,33 +36,28 @@ export function LoudnessDialog({ onClose }: { onClose: () => void }) {
   const withinTarget = report?.integrated_lufs != null && Math.abs(report.integrated_lufs - target) <= 1;
 
   return (
-    <Dialog onClose={onClose} title="Loudness report" footer={<Button onClick={onClose}>Close</Button>}>
+    <Dialog onClose={onClose} title="Loudness report" footer={<Button variant="outline" onClick={onClose}>Close</Button>}>
       <div className="space-y-3">
         <Field label="Source">
-          <Select
+          <OptionSelect
             value={key}
-            onChange={(e) => {
-              setKey(e.target.value);
+            placeholder="Nothing to measure yet"
+            onChange={(value) => {
+              setKey(value);
               setReport(null);
             }}
-          >
-            {media.clips.length === 0 && <option value="">Nothing to measure yet</option>}
-            {media.clips.map((c) => (
-              <option key={c.key} value={c.key}>
-                {c.title}
-              </option>
-            ))}
-          </Select>
+            options={media.clips.map((c) => ({ value: c.key, label: c.title }))}
+          />
         </Field>
-        <Button size="sm" onClick={measure} disabled={!key || busy}>
+        <Button size="sm" variant="outline" onClick={measure} disabled={!key || busy}>
           {busy ? "Measuring…" : "Measure"}
         </Button>
         {report && (
-          <div className="space-y-1 border border-ink-700 bg-white/[0.02] p-3 text-[12px]">
+          <div className="space-y-1.5 border-t pt-3 text-[13px]">
             <Row label="Integrated loudness" value={report.integrated_lufs} unit=" LUFS" />
             <Row label="True peak" value={report.true_peak_db} unit=" dBTP" />
             <Row label="Loudness range" value={report.loudness_range} unit=" LU" />
-            <p className={withinTarget ? "mt-1 text-pulse-green" : "mt-1 text-[#e2b93b]"}>
+            <p className={withinTarget ? "mt-1 text-pulse-green" : "mt-1 text-warning"}>
               {withinTarget
                 ? `Within 1 LU of the ${target} LUFS master target.`
                 : `Master target is ${target} LUFS — normalize on export to match it.`}
@@ -75,8 +71,8 @@ export function LoudnessDialog({ onClose }: { onClose: () => void }) {
 
 function Row({ label, value, unit }: { label: string; value: number | null; unit: string }) {
   return (
-    <div className="flex justify-between text-ink-300">
-      <span className="text-ink-400">{label}</span>
+    <div className="flex justify-between text-foreground">
+      <span className="text-muted-foreground">{label}</span>
       <span className="font-mono">{value != null ? `${value.toFixed(1)}${unit}` : "—"}</span>
     </div>
   );

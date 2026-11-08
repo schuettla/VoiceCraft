@@ -1,6 +1,6 @@
 import { useRef } from "react";
 import type { TimelineClip } from "../../lib/types";
-import { cx } from "../../components/ui";
+import { cx } from "../../components/common";
 import { useEditor } from "../store";
 import { useMedia } from "../MediaContext";
 import * as ops from "../ops";
@@ -138,7 +138,7 @@ export function ClipView({
     <div
       className={cx(
         "group absolute top-1 overflow-hidden rounded-md border select-none",
-        selected ? "z-10 border-accent ring-1 ring-accent" : "border-ink-600 hover:border-ink-500",
+        selected ? "z-10 border-primary ring-1 ring-primary" : "border-ink-600 hover:border-ink-500",
         clip.muted ? "opacity-40" : "bg-ink-800",
         editor.state.tool === "razor" && "cursor-[crosshair]",
       )}
@@ -188,11 +188,11 @@ export function ClipView({
       />
       {/* fade handles */}
       <div
-        className="absolute left-0 top-0 z-10 size-2.5 cursor-crosshair rounded-full bg-ink-100/0 opacity-0 group-hover:opacity-100 group-hover:bg-accent"
+        className="absolute left-0 top-0 z-10 size-2.5 cursor-crosshair rounded-full bg-ink-100/0 opacity-0 group-hover:opacity-100 group-hover:bg-primary"
         onMouseDown={(e) => beginDrag("fade-in", e)}
       />
       <div
-        className="absolute right-0 top-0 z-10 size-2.5 cursor-crosshair rounded-full bg-ink-100/0 opacity-0 group-hover:opacity-100 group-hover:bg-accent"
+        className="absolute right-0 top-0 z-10 size-2.5 cursor-crosshair rounded-full bg-ink-100/0 opacity-0 group-hover:opacity-100 group-hover:bg-primary"
         onMouseDown={(e) => beginDrag("fade-out", e)}
       />
     </div>

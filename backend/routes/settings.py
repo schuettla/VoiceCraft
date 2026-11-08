@@ -8,6 +8,7 @@ work starts from, and the two maintenance actions (free VRAM, reclaim disk).
 from __future__ import annotations
 
 import logging
+import platform
 import shutil
 import subprocess
 import sys
@@ -24,6 +25,7 @@ from models import (
     CleanupResult,
     DirectoryInfo,
     Preferences,
+    ResourcesOut,
     SettingsOut,
     ToolInfo,
 )
@@ -91,6 +93,46 @@ def _gpu() -> dict:
             "but slower and heavier on VRAM."
         )
     return info
+
+
+def _cpu_vendor() -> str | None:
+    name = platform.processor() or platform.machine() or ""
+    for vendor in ("AMD", "Intel", "Apple", "Qualcomm", "ARM"):
+        if vendor.lower() in name.lower():
+            return vendor
+    return name or None
+
+
+@router.get("/resources", response_model=ResourcesOut)
+def get_resources() -> ResourcesOut:
+    """Live CPU / RAM / GPU-memory load. Cheap enough to poll every few seconds."""
+    out = ResourcesOut(cpu_vendor=_cpu_vendor())
+    try:
+        import psutil  # noqa: PLC0415 - optional dependency
+
+        memory = psutil.virtual_memory()
+        out.ram_used_bytes = int(memory.total - memory.available)
+        out.ram_total_bytes = int(memory.total)
+        # interval=None compares against the previous call, so no blocking.
+        out.cpu_percent = psutil.cpu_percent(interval=None)
+        out.cpu_cores = psutil.cpu_count(logical=True)
+    except ImportError:
+        out.cpu_cores = None
+    try:
+        import torch  # noqa: PLC0415
+
+        if torch.cuda.is_available():
+            free, total = torch.cuda.mem_get_info()
+            out.gpu_name = torch.cuda.get_device_name(0)
+            out.gpu_backend = "CUDA"
+            out.gpu_mem_total_bytes = int(total)
+            out.gpu_mem_used_bytes = int(total - free)
+        elif getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():
+            out.gpu_name = "Apple GPU"
+            out.gpu_backend = "Metal"
+    except Exception:  # noqa: BLE001 - no torch / no GPU is a normal state
+        pass
+    return out
 
 
 @router.get("", response_model=SettingsOut)

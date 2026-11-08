@@ -7,18 +7,24 @@ python-multipart==0.0.20
 soundfile==0.12.1
 numpy>=1.26,<3
 huggingface_hub>=0.26   # the Models page downloads and removes weights directly
+psutil>=5.9             # live CPU / RAM readout in the sidebar (optional at runtime)
 
 # --- TTS engines ---------------------------------------------------------
 # torch is intentionally NOT pinned here: on Windows it must come from the
 # CUDA index, and a plain `pip install torch` silently installs the CPU wheel
-# (PRD §10). Install it first, explicitly:
+# (PRD §10). Install it first, explicitly (the shipped app picks the index by
+# GPU compute capability; see src-tauri/src/setup.rs):
 #
-#   pip install torch==2.5.1 torchaudio==2.5.1 --index-url https://download.pytorch.org/whl/cu121
+#   GTX 9xx/10xx/Volta (compute < 7.5):  --index-url https://download.pytorch.org/whl/cu126
+#   RTX 20xx and newer (incl. RTX 50xx): --index-url https://download.pytorch.org/whl/cu128
+#
+#   pip install torch==2.7.1 torchaudio==2.7.1 --index-url <index above>
 #
 # then install this file. Verify with:
 #   python -c "import torch; print(torch.cuda.is_available())"
 qwen-tts          # Qwen3-TTS: the *-Base checkpoints do the voice cloning
-transformers>=4.47
+transformers==4.57.3   # qwen-tts pins this exactly; keep every engine on it
 accelerate>=1.2
 kokoro==0.9.4
 misaki[en]==0.9.4
+kittenml==0.9.4   # KittenTTS 2 (needs torch>=2.6; Windows needs PYTHONUTF8=1)

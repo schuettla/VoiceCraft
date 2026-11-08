@@ -45,6 +45,11 @@ _ADDED_COLUMNS: dict[str, dict[str, str]] = {
         "voice_error": "TEXT",
         "voice_prepared_at": "DATETIME",
     },
+    "generations": {
+        "kind": "VARCHAR(8) NOT NULL DEFAULT 'speech'",
+        "engine": "VARCHAR(32)",
+        "params": "TEXT",
+    },
 }
 
 

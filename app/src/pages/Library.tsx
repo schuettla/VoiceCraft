@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "../lib/api";
-import type { Asset, Generation, Profile } from "../lib/types";
+import type { Asset, Generation, GenerationKind, Profile } from "../lib/types";
 import {
   formatBytes,
   formatDuration,
@@ -10,12 +10,31 @@ import {
 import { usePreferences } from "../lib/preferences";
 import { useToast } from "../components/Toaster";
 import { TrackRow } from "../components/TrackRow";
-import { Badge, Button, Empty, IconButton, Segmented, Select } from "../components/ui";
+import { KindIcon } from "../components/KindIcon";
+import {
+  Badge,
+  Empty,
+  IconButton,
+  OptionSelect,
+  PageHeader,
+  Segmented,
+} from "../components/common";
+import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Input } from "@/components/ui/input";
 import { DownloadIcon, FolderIcon, SearchIcon, TrashIcon } from "../components/icons";
 
 const ACTIVE: Generation["status"][] = ["queued", "processing"];
 
 type Mode = "all" | "completed" | "failed" | "exports";
+type TypeFilter = "all" | GenerationKind;
+
+const TYPES: { value: TypeFilter; label: string }[] = [
+  { value: "all", label: "All types" },
+  { value: "speech", label: "Voice" },
+  { value: "music", label: "Music" },
+  { value: "sfx", label: "Sound FX" },
+];
 
 const MODES: { value: Mode; label: string }[] = [
   { value: "all", label: "All" },
@@ -34,6 +53,7 @@ export function LibraryPage() {
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [query, setQuery] = useState("");
   const [voiceId, setVoiceId] = useState("");
+  const [type, setType] = useState<TypeFilter>("all");
   const [mode, setMode] = useState<Mode>("all");
   const [selected, setSelected] = useState<Set<string>>(new Set());
 
@@ -69,6 +89,9 @@ export function LibraryPage() {
   );
 
   const showingExports = mode === "exports";
+  // A voice only exists for speech, so the voice filter means nothing for
+  // music or sound effects and is hidden (and ignored) there.
+  const voiceFilterApplies = type === "all" || type === "speech";
 
   const visibleGenerations = useMemo(() => {
     if (showingExports) return [];
@@ -76,11 +99,12 @@ export function LibraryPage() {
     return generations.filter((g) => {
       if (mode === "completed" && g.status !== "completed") return false;
       if (mode === "failed" && g.status !== "failed") return false;
-      if (voiceId && g.profile_id !== voiceId) return false;
+      if (type !== "all" && g.kind !== type) return false;
+      if (voiceFilterApplies && voiceId && g.profile_id !== voiceId) return false;
       if (needle && !g.text.toLowerCase().includes(needle)) return false;
       return true;
     });
-  }, [generations, mode, voiceId, query, showingExports]);
+  }, [generations, mode, type, voiceId, voiceFilterApplies, query, showingExports]);
 
   const visibleExports = useMemo(() => {
     if (!showingExports) return [];
@@ -146,37 +170,44 @@ export function LibraryPage() {
   const shownCount = showingExports ? visibleExports.length : visibleGenerations.length;
 
   return (
-    <div className="mx-auto max-w-6xl space-y-4">
-      <div>
-        <h1 className="text-xl font-medium tracking-tight text-white">Library</h1>
-        <p className="mt-1 text-[13px] text-ink-400">
-          {shownCount} shown · {formatDuration(totalSeconds)} of audio
-        </p>
-      </div>
+    <>
+      <PageHeader
+        title="Library"
+        description={`${shownCount} shown · ${formatDuration(totalSeconds)} of audio`}
+      />
 
-      <div className="sticky top-0 z-10 flex flex-wrap items-center gap-2 rounded-xl border border-ink-700 bg-ink-900 p-2">
+      <div className="sticky top-0 z-10 -mx-1 flex flex-wrap items-center gap-2 bg-background px-1 pb-4">
         <div className="relative min-w-[200px] flex-1">
-          <SearchIcon className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-ink-400" />
-          <input
+          <SearchIcon className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
+          <Input
             value={query}
             placeholder={showingExports ? "Search exports…" : "Search scripts…"}
             onChange={(e) => setQuery(e.target.value)}
-            className="w-full rounded-md border border-white/10 bg-white/[0.02] py-2 pl-9 pr-3 text-sm text-ink-200 placeholder:text-ink-400 focus:border-ink-200 focus:outline-none"
+            className="pl-9"
           />
         </div>
-        <Select
-          value={voiceId}
-          onChange={(e) => setVoiceId(e.target.value)}
+        <OptionSelect
+          value={type}
+          onChange={(value) => {
+            setType(value as TypeFilter);
+            setSelected(new Set());
+          }}
           disabled={showingExports}
-          className="w-auto min-w-[140px]"
-        >
-          <option value="">All voices</option>
-          {profiles.map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.name}
-            </option>
-          ))}
-        </Select>
+          className="w-36"
+          options={TYPES}
+        />
+        {voiceFilterApplies && (
+          <OptionSelect
+            value={voiceId || "__all"}
+            onChange={(value) => setVoiceId(value === "__all" ? "" : value)}
+            disabled={showingExports}
+            className="w-44"
+            options={[
+              { value: "__all", label: "All voices" },
+              ...profiles.map((p) => ({ value: p.id, label: p.name })),
+            ]}
+          />
+        )}
         <Segmented
           options={MODES}
           value={mode}
@@ -187,42 +218,40 @@ export function LibraryPage() {
         />
       </div>
 
-      <div className="rounded-xl border border-ink-700 bg-ink-900">
-        <div className="flex items-center gap-3 border-b border-ink-700 px-4 py-2.5">
-          <input
-            type="checkbox"
+      <div className="border-y">
+        <div className="flex h-11 items-center gap-3 border-b px-2">
+          <Checkbox
             checked={allSelected}
-            onChange={(e) =>
-              setSelected(e.target.checked ? new Set(rowIds) : new Set())
+            onCheckedChange={(next) =>
+              setSelected(next === true ? new Set(rowIds) : new Set())
             }
-            className="size-3.5 accent-accent"
             aria-label="Select all"
           />
           {selectedHere.length > 0 ? (
             <>
-              <span className="text-[13px] text-ink-200">
+              <span className="text-[13px] text-foreground">
                 {selectedHere.length} selected
               </span>
               <Button
                 size="sm"
-                variant="danger"
+                variant="destructive"
                 className="ml-auto"
                 onClick={deleteSelected}
               >
                 Delete selected
               </Button>
-              <Button size="sm" onClick={() => setSelected(new Set())}>
+              <Button size="sm" variant="outline" onClick={() => setSelected(new Set())}>
                 Clear
               </Button>
             </>
           ) : (
-            <span className="text-[11px] uppercase tracking-wide text-ink-400">
+            <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
               {showingExports ? "Exported file" : "Script"}
             </span>
           )}
         </div>
 
-        <div className="p-2">
+        <div className="divide-y">
           {shownCount === 0 ? (
             <Empty>
               {showingExports
@@ -266,14 +295,19 @@ export function LibraryPage() {
           ) : (
             visibleGenerations.map((g) => {
               const done = g.status === "completed" && !!g.audio_path;
-              const who = g.profile_id
-                ? (names.get(g.profile_id) ?? "deleted voice")
-                : undefined;
+              // Only speech has a voice; music and sound effects never do, so
+              // they must not read "deleted voice".
+              const who =
+                g.kind === "speech" && g.profile_id
+                  ? (names.get(g.profile_id) ?? "deleted voice")
+                  : undefined;
               const active = ACTIVE.includes(g.status);
               return (
                 <TrackRow
                   key={g.id}
                   busy={active}
+                  leading={<KindIcon kind={g.kind} />}
+                  title={truncate(g.text, 120)}
                   selected={selected.has(g.id)}
                   onSelectedChange={(next) => toggle(g.id, next)}
                   track={
@@ -346,6 +380,6 @@ export function LibraryPage() {
           )}
         </div>
       </div>
-    </div>
+    </>
   );
 }

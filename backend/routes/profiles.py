@@ -5,6 +5,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from sqlalchemy.orm import Session
 
+from backends import kitten_backend
 from backends.kokoro_backend import PRESET_VOICES
 from database.session import get_session
 from models import Engine, GenerateRequest, GenerationOut, ProfileCreate, ProfileOut
@@ -15,9 +16,19 @@ router = APIRouter(prefix="/api/profiles", tags=["profiles"])
 
 
 @router.get("/voices", response_model=list[str])
-def kokoro_voices() -> list[str]:
-    """Preset voice ids available to Kokoro profiles (it cannot clone)."""
-    return list(PRESET_VOICES)
+def preset_voices(engine: Engine = Engine.kokoro) -> list[str]:
+    """Preset voice ids an engine offers for preset profiles.
+
+    Kokoro cannot clone, so every Kokoro profile is a preset (the default, so
+    older clients keep working). KittenTTS 2 lists the voices of the downloaded
+    model, or its bundled list before the weights are there. Qwen3-TTS has
+    none: it only clones.
+    """
+    if engine == Engine.kitten:
+        return kitten_backend.preset_voices()
+    if engine == Engine.kokoro:
+        return list(PRESET_VOICES)
+    return []
 
 
 @router.get("", response_model=list[ProfileOut])
@@ -43,7 +54,7 @@ async def create_profile(
     sample: UploadFile | None = File(None),
     session: Session = Depends(get_session),
 ) -> ProfileOut:
-    """Multipart because a Qwen profile carries its reference clip inline."""
+    """Multipart because a cloned profile carries its reference clip inline."""
     payload = await sample.read() if sample is not None else None
     try:
         return profile_service.create_profile(

@@ -15,6 +15,7 @@ import config
 from backends import all_backends, unload_all
 from database.session import init_db
 from models import EngineStatus, HealthOut
+from routes import audio as audio_route
 from routes import edit, generate, profiles, settings
 from routes import models as models_route
 from services import generation_service, model_service, voice_service
@@ -38,11 +39,14 @@ def _active_model(engine: str) -> dict:
     """Which checkpoint an engine is pointed at, for the health badge."""
     try:
         repo_id = catalog.active_repo_id(engine)
+        downloaded = model_service.active_downloaded(engine)
+        spec = next((s for s in catalog.for_engine(engine) if catalog.is_active(s)), None)
     except KeyError:
         return {}
     return {
         "model": repo_id,
-        "model_downloaded": model_service.is_downloaded(repo_id),
+        "model_id": spec.id if spec else None,
+        "model_downloaded": downloaded,
     }
 
 
@@ -85,6 +89,7 @@ def create_app() -> FastAPI:
 
     app.include_router(profiles.router)
     app.include_router(generate.router)
+    app.include_router(audio_route.router)
     app.include_router(edit.router)
     app.include_router(models_route.router)
     app.include_router(settings.router)
@@ -97,6 +102,7 @@ def create_app() -> FastAPI:
                 name=name,
                 available=backend.available(),
                 loaded=backend.is_loaded(),
+                optional=bool(getattr(backend, "optional", False)),
                 device=backend.device(),
                 detail=(
                     None

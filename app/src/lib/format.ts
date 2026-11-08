@@ -10,6 +10,13 @@ export function formatDuration(seconds: number | null | undefined): string {
   return `${minutes}:${String(total % 60).padStart(2, "0")}`;
 }
 
+/** "45 seconds", "2.5 minutes", "12 minutes" — for time estimates. */
+export function formatMinutes(seconds: number): string {
+  if (seconds < 90) return `${Math.round(seconds)} seconds`;
+  const minutes = seconds / 60;
+  return `${minutes >= 10 ? Math.round(minutes) : minutes.toFixed(1)} minutes`;
+}
+
 export function formatBytes(bytes: number | null | undefined): string {
   if (bytes == null) return "—";
   const units = ["B", "KB", "MB", "GB"];

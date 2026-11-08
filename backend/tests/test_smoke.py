@@ -68,11 +68,76 @@ def main() -> int:
         health = client.get("/api/health").json()
         check("responds", health["version"] == "0.1.0")
         check("ffmpeg detected", health["ffmpeg"] is True, str(health))
-        check("both engines listed", {e["name"] for e in health["engines"]} == {"qwen", "kokoro"})
+        check("speech and audio engines listed",
+              {e["name"] for e in health["engines"]}
+              == {"qwen", "kokoro", "kitten", "acestep", "moss_sfx", "sa3_music", "sa3_sfx"})
+        check("only the music / SFX engines are optional",
+              {e["name"] for e in health["engines"] if e["optional"]}
+              == {"acestep", "moss_sfx", "sa3_music", "sa3_sfx"})
 
         print("profiles")
         voices = client.get("/api/profiles/voices").json()
         check("kokoro presets exposed", "af_heart" in voices)
+        check("presets default to kokoro's list", voices == client.get(
+            "/api/profiles/voices", params={"engine": "kokoro"}).json())
+        kitten_voices = client.get("/api/profiles/voices", params={"engine": "kitten"}).json()
+        check("kitten presets exposed", "Bruno" in kitten_voices and len(kitten_voices) >= 100)
+        check("qwen has no presets",
+              client.get("/api/profiles/voices", params={"engine": "qwen"}).json() == [])
+
+        # KittenTTS 2: a profile is a clone (sample + transcript) or a preset.
+        # Nothing here touches the model: creation only validates and records.
+        clip = make_tone(tones / "kitten-sample.wav", 3, 330)
+        clip_files = {"sample": ("kitten-sample.wav", clip.read_bytes(), "audio/wav")}
+        response = client.post(
+            "/api/profiles",
+            data={"name": "Kitten clone", "engine": "kitten"},
+            files=clip_files,
+        )
+        check("kitten clone without a transcript rejected", response.status_code == 400, response.text)
+        check("the refusal explains why", "transcript" in response.text)
+        response = client.post(
+            "/api/profiles",
+            data={"name": "Kitten clone", "engine": "kitten", "sample_text": "   "},
+            files=clip_files,
+        )
+        check("a blank transcript counts as missing", response.status_code == 400)
+        response = client.post(
+            "/api/profiles",
+            data={"name": "Both", "engine": "kitten", "sample_text": "hello", "preset_voice": "Bruno"},
+            files=clip_files,
+        )
+        check("clone and preset together rejected", response.status_code == 400, response.text)
+        response = client.post(
+            "/api/profiles", data={"name": "No voice", "engine": "kitten"})
+        check("kitten profile with neither rejected", response.status_code == 400)
+        response = client.post(
+            "/api/profiles",
+            data={"name": "Bad voice", "engine": "kitten", "preset_voice": "Nobody"},
+        )
+        check("unknown kitten preset rejected", response.status_code == 400)
+        response = client.post(
+            "/api/profiles",
+            data={"name": "Kitten Bruno", "engine": "kitten", "preset_voice": "Bruno"},
+        )
+        check("kitten preset profile created", response.status_code == 201, response.text)
+        kitten_preset = response.json()
+        check("a preset profile needs no voice print", kitten_preset["voice_status"] == "not_needed")
+        check("preset profile keeps its voice", kitten_preset["preset_voice"] == "Bruno")
+        response = client.post(
+            "/api/profiles",
+            data={"name": "Kitten clone", "engine": "kitten", "sample_text": "  The quick brown fox.  "},
+            files=clip_files,
+        )
+        check("kitten clone created", response.status_code == 201, response.text)
+        kitten_clone = response.json()
+        check("a clone waits for its voice print", kitten_clone["voice_status"] == "pending")
+        check("the transcript is stored trimmed", kitten_clone["sample_text"] == "The quick brown fox.")
+        check("a clone has no preset", kitten_clone["preset_voice"] is None)
+        check("retrying a preset profile stays not_needed",
+              client.post(f"/api/profiles/{kitten_preset['id']}/prepare").json()["voice_status"] == "not_needed")
+        for created in (kitten_preset, kitten_clone):
+            client.delete(f"/api/profiles/{created['id']}")
 
         response = client.post(
             "/api/profiles",
@@ -122,11 +187,18 @@ def main() -> int:
         catalog = client.get("/api/models").json()
         ids = {m["id"] for m in catalog["models"]}
         check("catalog listed", {"qwen3-tts-0.6b", "kokoro-82m"} <= ids, str(ids))
+        check("both kitten variants listed", {"kitten-tts-2", "kitten-tts-2-emb4"} <= ids, str(ids))
+        check("music and sfx entries listed",
+              {"acestep-1.5-turbo", "acestep-1.5-sft", "acestep-1.5-xl-turbo", "moss-sfx-v2"} <= ids, str(ids))
+        check("the page has a section per kind",
+              [c["id"] for c in catalog["categories"]] == ["speech", "music", "sfx"])
+        check("audio entries are marked as on-demand engines",
+              all(m["optional_engine"] for m in catalog["models"] if m["category"] in ("music", "sfx")))
         check("storage location reported", bool(catalog["models_dir"]))
         check(
             "one active checkpoint per engine",
             sorted(m["engine"] for m in catalog["models"] if m["active"])
-            == ["kokoro", "qwen"],
+            == ["acestep", "kitten", "kokoro", "moss_sfx", "qwen", "sa3_music", "sa3_sfx"],
         )
 
         response = client.post("/api/models/qwen3-tts-1.7b/select")

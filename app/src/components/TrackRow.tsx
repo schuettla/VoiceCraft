@@ -1,17 +1,21 @@
 import type { ReactNode } from "react";
 import { useAudio, type Track } from "./AudioPlayer";
 import { PlayIcon, PauseIcon, SpinnerIcon, WaveIcon } from "./icons";
-import { cx } from "./ui";
+import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import { cn } from "@/lib/utils";
 
 /* One dense, scannable line: play toggle · title + meta · trailing actions,
- * with an optional detail block underneath. Used by the Generate session list,
- * the Library, the Edit clip tray, and the Profiles list so every row of audio
- * in the app looks and behaves the same. */
+ * with an optional detail block underneath. Rows sit directly on the page and
+ * are separated by hairlines (wrap a list in `divide-y`) — no per-row boxes.
+ * Used by the Generate results, the Library, the Edit clip tray and the
+ * Profiles list so every row of audio in the app behaves the same. */
 
 export function TrackRow({
   track,
   title,
   meta,
+  leading,
   badge,
   actions,
   detail,
@@ -25,6 +29,8 @@ export function TrackRow({
   /** Title to show when there is no playable track. */
   title?: string;
   meta?: ReactNode;
+  /** Small marker before the title (the kind of audio: voice, music, effect). */
+  leading?: ReactNode;
   badge?: ReactNode;
   actions?: ReactNode;
   /** Rendered below the row, aligned past the play button. */
@@ -41,33 +47,27 @@ export function TrackRow({
 
   return (
     <div
-      className={cx(
-        "group rounded-md px-2 py-2 transition",
-        selected ? "bg-accent-soft" : "hover:bg-white/[0.03]",
+      className={cn(
+        "group px-2 py-3 transition-colors",
+        selected ? "bg-primary/10" : "hover:bg-accent/40",
       )}
     >
       <div className="flex items-center gap-3">
         {onSelectedChange && (
-          <input
-            type="checkbox"
+          <Checkbox
             checked={!!selected}
-            onChange={(e) => onSelectedChange(e.target.checked)}
-            className="size-3.5 shrink-0 accent-accent"
+            onCheckedChange={(next) => onSelectedChange(next === true)}
             aria-label="Select row"
           />
         )}
 
-        <button
+        <Button
           type="button"
+          size="icon-sm"
+          variant={isCurrent ? "default" : "outline"}
           disabled={!playable}
           onClick={() => track && audio.play(track)}
-          className={cx(
-            "grid size-8 shrink-0 place-items-center rounded-md border transition",
-            isCurrent
-              ? "border-transparent bg-accent text-ink-950"
-              : "border-ink-700 text-ink-300 hover:border-ink-600 hover:text-ink-100",
-            !playable && "opacity-40",
-          )}
+          className={cn("shrink-0 rounded-full", !isCurrent && "text-muted-foreground")}
           aria-label={isPlaying ? "Pause" : busy ? "Working" : "Play"}
         >
           {busy ? (
@@ -79,7 +79,7 @@ export function TrackRow({
           ) : (
             <PlayIcon />
           )}
-        </button>
+        </Button>
 
         <button
           type="button"
@@ -87,10 +87,11 @@ export function TrackRow({
           className="min-w-0 flex-1 text-left"
         >
           <div className="flex items-center gap-2">
+            {leading}
             <span
-              className={cx(
-                "truncate text-[13px]",
-                isCurrent ? "text-accent" : "text-ink-200",
+              className={cn(
+                "truncate text-sm",
+                isCurrent ? "font-medium text-primary" : "text-foreground",
               )}
             >
               {track?.title ?? title ?? "Untitled"}
@@ -98,12 +99,12 @@ export function TrackRow({
             {badge}
           </div>
           {meta && (
-            <div className="mt-0.5 truncate text-[11px] text-ink-400">{meta}</div>
+            <div className="mt-0.5 truncate text-xs text-muted-foreground">{meta}</div>
           )}
         </button>
 
         {actions && (
-          <div className="flex shrink-0 items-center gap-0.5 opacity-60 transition group-hover:opacity-100">
+          <div className="flex shrink-0 items-center gap-0.5 opacity-70 transition-opacity group-hover:opacity-100">
             {actions}
           </div>
         )}

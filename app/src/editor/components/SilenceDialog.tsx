@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
 import type { SilenceRegion } from "../../lib/types";
 import { formatDuration } from "../../lib/format";
-import { Button, Field } from "../../components/ui";
+import { Field } from "../../components/common";
+import { Button } from "@/components/ui/button";
+import { Slider } from "@/components/ui/slider";
 import { Dialog } from "../../components/Dialog";
 import { api } from "../../lib/api";
 import { useToast } from "../../components/Toaster";
@@ -73,37 +75,37 @@ export function SilenceDialog({ onClose }: { onClose: () => void }) {
       title="Remove silence"
       footer={
         <>
-          <Button onClick={onClose}>Cancel</Button>
-          <Button variant="primary" disabled={!regions || regions.length === 0} onClick={apply}>
+          <Button variant="outline" onClick={onClose}>Cancel</Button>
+          <Button disabled={!regions || regions.length === 0} onClick={apply}>
             Cut silence
           </Button>
         </>
       }
     >
       {!clip ? (
-        <p className="text-[12px] text-ink-400">Select a clip on the timeline first.</p>
+        <p className="text-[13px] text-muted-foreground">Select a clip on the timeline first.</p>
       ) : (
         <div className="space-y-3">
-          <p className="truncate text-[12px] text-ink-400">{source?.title}</p>
+          <p className="truncate text-[13px] text-muted-foreground">{source?.title}</p>
           <Field label={`Threshold — ${noiseDb} dB`}>
-            <input
-              type="range" min={-60} max={-10} step={1} value={noiseDb}
-              onChange={(e) => setNoiseDb(Number(e.target.value))}
-              className="w-full accent-accent"
+            <Slider
+              min={-60} max={-10} step={1} value={[noiseDb]}
+              onValueChange={([next]) => setNoiseDb(next)}
+              className="py-1.5"
             />
           </Field>
           <Field label={`Minimum length — ${minDuration.toFixed(2)}s`}>
-            <input
-              type="range" min={0.1} max={3} step={0.1} value={minDuration}
-              onChange={(e) => setMinDuration(Number(e.target.value))}
-              className="w-full accent-accent"
+            <Slider
+              min={0.1} max={3} step={0.1} value={[minDuration]}
+              onValueChange={([next]) => setMinDuration(next)}
+              className="py-1.5"
             />
           </Field>
-          <Button size="sm" onClick={detect} disabled={busy}>
+          <Button size="sm" variant="outline" onClick={detect} disabled={busy}>
             {busy ? "Scanning…" : "Scan for silence"}
           </Button>
           {regions && (
-            <p className="text-[12px] text-ink-300">
+            <p className="text-[13px] text-muted-foreground">
               {regions.length === 0
                 ? "No silence found at this threshold."
                 : `${regions.length} region${regions.length === 1 ? "" : "s"}, ` +

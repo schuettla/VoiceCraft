@@ -5,30 +5,38 @@ Hugging Face model downloads on first use.
 
 ## Install (developer checkout)
 
-Python **3.11** is the target (PyTorch has no CUDA wheels for 3.13/3.14 yet).
-In the shipped app, first-run setup installs a private Python and does this
-for you — this section is only for running the backend directly.
+Python **3.12** is the target (the shipped runtime is Python 3.12 + torch 2.7.1;
+PyTorch has no CUDA wheels for 3.13/3.14 yet). In the shipped app, first-run
+setup installs a private Python and does this for you — this section is only
+for running the backend directly.
 
 ```powershell
-py -3.11 -m venv .venv
+py -3.12 -m venv .venv
 .venv\Scripts\activate
 
 # 1. torch FIRST — a plain `pip install torch` silently installs the CPU-only
 #    wheel on Windows/Linux, which is the pain point the PRD calls out.
-#    Windows/Linux + NVIDIA:
-pip install torch==2.5.1 torchaudio==2.5.1 --index-url https://download.pytorch.org/whl/cu121
+#    Windows/Linux + NVIDIA, GTX 9xx/10xx/Volta (compute capability < 7.5;
+#    cu128 dropped Pascal):
+pip install torch==2.7.1 torchaudio==2.7.1 --index-url https://download.pytorch.org/whl/cu126
+#    Windows/Linux + NVIDIA, RTX 20xx and newer (incl. RTX 50xx). Check yours
+#    with: nvidia-smi --query-gpu=compute_cap --format=csv
+pip install torch==2.7.1 torchaudio==2.7.1 --index-url https://download.pytorch.org/whl/cu128
 #    macOS (Apple Silicon) — the default PyPI wheel already includes Metal
 #    (MPS) support, so no --index-url is needed:
-pip install torch==2.5.1 torchaudio==2.5.1
+pip install torch==2.7.1 torchaudio==2.7.1
 #    CPU only (any platform):
-pip install torch==2.5.1 torchaudio==2.5.1 --index-url https://download.pytorch.org/whl/cpu
+pip install torch==2.7.1 torchaudio==2.7.1 --index-url https://download.pytorch.org/whl/cpu
 
-# 2. everything else
+# 2. everything else (pins transformers==4.57.3, which every engine shares)
 pip install -r backend/requirements.txt
 
 # 3. verify
 python -c "import torch; print(torch.__version__, torch.cuda.is_available())"
 ```
+
+On Windows set `PYTHONUTF8=1` when running the backend by hand; the app does
+this itself (KittenTTS 2 reads a bundled JSON file without an encoding).
 
 `ffmpeg` and `ffprobe` must be on `PATH` (or set `VOICECRAFT_FFMPEG` /
 `VOICECRAFT_FFPROBE`). Check with `ffmpeg -version`.
@@ -38,7 +46,12 @@ python -c "import torch; print(torch.__version__, torch.cuda.is_available())"
 ```powershell
 python backend/main.py            # http://127.0.0.1:17610/docs
 python backend/main.py --reload   # autoreload while developing
-python backend/tests/test_smoke.py  # 32 checks, needs ffmpeg only
+python backend/tests/test_smoke.py     # API end to end, needs ffmpeg only
+python backend/tests/test_plumbing.py  # device helper, catalog, downloads, scheduling (no weights)
+python backend/tests/test_kitten.py    # KittenTTS 2 backend against a fake model (no weights)
+python backend/tests/test_audio.py     # music / SFX backend, API and queue against a fake engine (no weights, no GPU)
+python backend/tests/test_sa3.py       # Stable Audio 3: gated downloads, token store, adapter against a fake package
+python backend/tests/test_generate_kitten.py  # live: loads the model; skips without kittenml + weights
 ```
 
 ## Layout
@@ -53,6 +66,12 @@ python backend/tests/test_smoke.py  # 32 checks, needs ffmpeg only
 | `services/` | profile, voice, generation, model, and edit logic |
 | `services/voice_service.py` | the cloning step — extracts and stores voice prints |
 | `backends/` | TTS engines behind one protocol + registry |
+| `backends/device.py` | one device / precision decision for every engine (`pick_device`), plus `hardware()` |
+| `backends/audio_engines.py` | the music / SFX engines (`acestep`, `moss_sfx`): lifecycle and per-machine limits |
+| `backends/sa3_engines.py`, `backends/sa3_files.py` | Stable Audio 3 Small (`sa3_music`, `sa3_sfx`) and the config reading that finds its text encoder |
+| `services/hf_token.py` | the Hugging Face token for gated downloads (write-only) |
+| `services/audio_service.py` | music / SFX jobs: readiness checks, takes, file names |
+| `catalog.py` | the downloadable checkpoints, their licenses, and which one each engine uses |
 | `database/` | SQLAlchemy models and session |
 | `utils/audio.py` | every ffmpeg invocation |
 
@@ -69,6 +88,7 @@ generations/  TTS output, in the format the request asked for
 assets/       intro/outro clips you uploaded
 edits/        trim / assemble / convert results  ← finished episodes land here
 tmp/          ffmpeg intermediates
+secrets/      the Hugging Face token, if you pasted one (not listed, served or cleaned)
 voicecraft.db SQLite
 ```
 
@@ -78,10 +98,62 @@ voicecraft.db SQLite
 |---|---|---|---|
 | `qwen` (Qwen3-TTS-12Hz-0.6B-**Base**) | yes, zero-shot from a sample | CUDA (float32 on pre-Ampere cards), Apple Silicon MPS, CPU fallback with a warning | only the `*-Base` checkpoints clone; CustomVoice/VoiceDesign are preset-timbre models. A profile with a sample transcript clones better than one without |
 | `kokoro` (Kokoro-82M) | **no** | CPU | picks one of ~50 preset voices; fast enough for drafts |
+| `kitten` (KittenTTS 2, 1.7B ternary) | yes, from a 5–30 s clip **and its transcript** | CUDA (bf16, also on Pascal), CPU about 15× slower than real time; no MPS | a profile is *either* a clone *or* one of 115 preset voices. 20 languages, `[joyful]` / `<laugh>` / `(((emphasis)))` tags, `stable` / `expressive` style, seed. No speed control. Weights: Stellon Labs Community License (conditional tier) |
+
+### Music and sound effects
+
+`acestep` (ACE-Step 1.5, music), `moss_sfx` (MOSS-SoundEffect v2, SFX) and the
+two Stable Audio 3 Small engines `sa3_music` / `sa3_sfx` are `AudioBackend`s: no
+voice, just a prompt (`AudioSpec`). They sit in the same registry as the speech
+engines, so the one-job-at-a-time rule, unload-before-job and the idle unload cover
+them. All are `optional` (installed on demand). ACE-Step and MOSS are open-licensed;
+Stable Audio 3 is **gated** and under Stability's Community License.
+
+| Endpoint | What it does |
+|---|---|
+| `GET /api/audio-engines` | per engine: `installed`, `supported` (+ `unsupported_reason`), `warning`, `max_duration_seconds`, the catalog entry and whether its weights are on disk, license tier, `gated`, `lyrics` (can it sing), `default`, `ready` |
+| `GET` / `PUT` / `DELETE /api/models/hf-token` | the Hugging Face token for gated downloads. Write-only: `GET` and `PUT` answer `{configured, source}` (`app` or `huggingface`), never the token |
+| `POST /api/generations/audio` | `{kind, engine?, prompt, duration_seconds, lyrics?, seed?, steps?, guidance?, takes?, output_format}` → **202 with a list** of `queued` rows (`takes` of them for SFX, one for music) |
+| `GET /api/generations?kind=speech\|music\|sfx` | the history, narrowed to one type |
+
+A request is refused up front, in this order: unknown engine or wrong kind (400),
+not installed, weights not downloaded, hardware can't run it (all 409, each says
+what to do), clip longer than this machine allows (400). Limits come from the
+Phase 0 run on a 6 GB GTX 1060: ACE-Step is capped at 30 s on a card with under
+8 GB or without bf16 (a 2 minute clip did not finish), MOSS is offered from about
+6 GB and warns that it takes minutes per clip.
+
+Rows have `profile_id: null`; `text` is the prompt and `params` holds
+`duration_seconds`, `lyrics`, `seed`, `steps`, `guidance` and, for several takes,
+`take` / `takes`. With a fixed `seed` each take offsets it by its index (otherwise
+every take would be the same clip), and the row records the seed it used. Files
+are named from the first words of the prompt (`heavy-wooden-door-slamming-1a2b3c4d.wav`).
+
+A request with `lyrics` for an engine that can't sing (`lyrics: false`) is refused
+with a 400 before readiness is checked.
+
+**Stable Audio 3 and the gate.** `sa3_music` and `sa3_sfx` load
+`stabilityai/stable-audio-3-small-{music,sfx}` through the `stable_audio_3`
+package without ever touching the network: `sa3_engines.py` rebuilds what
+`StableAudioModel.from_pretrained` does (config → `load_diffusion_cond` →
+`StableAudioModel`) from the cache, because `from_pretrained` downloads on every
+call. The model's text encoder is a *second repository* named in its own
+`model_config.json` (`backends/sa3_files.py` reads it); the Models page downloads
+it along with the model (`ModelSpec.companion`), and the adapter pins the config
+to the local folder. Downloads of a gated entry carry the token from
+`services/hf_token.py` (stored in `<data dir>/secrets/hf_token`, never logged or
+returned) and turn the Hub's 401/403 into steps a person can follow.
+
+**Status:** ACE-Step and MOSS make real calls (Phases 6 and 7) but were run only
+as far as the Phase 0 spike on a GTX 1060. **Stable Audio 3 has never run on any
+machine**: the weights are gated and the build machine has no Hugging Face access.
+Its adapter is tested against a fake package with the call shapes read from the
+library's source (`tests/test_sa3.py`); what the real model sounds like, how fast it
+is, and whether its text encoder loads the way the config says are all unverified.
 
 ## Cloning a voice
 
-Creating a `qwen` profile queues a **voice print** extraction rather than only
+Creating a `qwen` profile (or a `kitten` clone) queues a **voice print** extraction rather than only
 writing a row: the reference clip is run through the model's speaker encoder
 (and, with a transcript, its speech tokenizer) once, and the result is saved to
 `voices/<profile id>.vprint`. Generation loads that file instead of re-analysing
@@ -99,6 +171,42 @@ unfinished, so profiles created before this step existed get one on first run.
 
 `POST /api/profiles/{id}/prepare` re-extracts; `POST /api/profiles/{id}/preview`
 speaks a fixed test line as an ordinary generation.
+
+KittenTTS 2 clones **require the sample's transcript**. Without one, kittenml
+would download Whisper large-v3 (~3 GB) to transcribe the clip, so profile
+creation refuses and the backend double-checks. Its voice print is an `.npz`
+(`np.savez`, loaded with `allow_pickle=False`) holding the speaker embedding,
+the reference codec tokens and the transcript; the sample stays on disk because
+kittenml rebuilds its vocoder conditioning from it. The hooks used
+(`speaker_encoder`, `codec.encode_reference`, `_build_reference`,
+`_reference_cache`) are private, hence `kittenml==0.9.4`; if they change, the
+clip is analysed on every generation instead, which is slower, not wrong.
+`GET /api/profiles/voices?engine=kitten` lists the presets (read from the
+downloaded model, else the bundled list). `POST /api/generations` accepts
+`preset` (`stable`|`expressive`) and `seed` for Kitten profiles; they are kept
+in the generation's `params`.
+
+## Models and GPU use
+
+Each engine loads one checkpoint from `catalog.py`. The choice is saved in
+`settings.json` under `active_models` by **model id** (two entries may share a
+Hugging Face repo and differ only in the files they fetch); a `qwen_model` /
+`kokoro_model` repo id written by an older build is still read until the Models
+page replaces it. `VOICECRAFT_QWEN_MODEL` / `VOICECRAFT_KOKORO_MODEL` override
+the choice with any repo id. KittenTTS 2 has no such override: its two variants
+(`kitten-tts-2`, `kitten-tts-2-emb4`) share one repo, so a repo id could not say
+which one is meant; pick it on the Models page.
+Downloading either also fetches `s3gen_meanflow.safetensors` (~1 GB) from
+`ResembleAI/chatterbox-turbo`, which Kitten's vocoder would otherwise fetch on first use.
+
+Jobs run one at a time. Before a job every other loaded engine is unloaded and
+VRAM is returned to the driver, so two engines never share a 6 GB card, and
+after `VOICECRAFT_IDLE_UNLOAD_SECONDS` without work the loaded engine is
+unloaded too. `GET /api/health` marks engines installed on demand with
+`optional: true`.
+
+Generations carry `kind` (`speech`, `music` or `sfx`), `engine` and a JSON
+`params` object; databases from older builds gain the columns on startup.
 
 ## Output formats
 
@@ -120,3 +228,4 @@ alone (FR10).
 | `VOICECRAFT_QWEN_MODEL` | `Qwen/Qwen3-TTS-12Hz-0.6B-Base` (1.7B-Base if you have the VRAM) |
 | `VOICECRAFT_KOKORO_MODEL` | `hexgrad/Kokoro-82M` |
 | `VOICECRAFT_AUTO_PREPARE` | `1` — set `0` to skip voice-print extraction (the test suite does) |
+| `VOICECRAFT_IDLE_UNLOAD_SECONDS` | `600` — unload loaded models after this long without a job; `0` disables |

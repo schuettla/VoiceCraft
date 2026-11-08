@@ -2,7 +2,9 @@ import { useState } from "react";
 import { formatDuration } from "../../lib/format";
 import { useToast } from "../../components/Toaster";
 import { TrackRow } from "../../components/TrackRow";
-import { Badge, Empty, IconButton, Segmented } from "../../components/ui";
+import { Badge, Empty, IconButton, OptionSelect } from "../../components/common";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { PlusIcon, SearchIcon, TrashIcon } from "../../components/icons";
 import { useMedia, MEDIA_KIND_LABEL, type MediaClip } from "../MediaContext";
 import { useEditor } from "../store";
@@ -10,7 +12,7 @@ import * as ops from "../ops";
 
 export const MEDIA_DRAG_MIME = "application/x-voicecraft-media-key";
 
-type Filter = "all" | "voices" | "io" | "clips" | "outputs";
+type Filter = "all" | "voices" | "music" | "sfx" | "io" | "clips" | "outputs";
 
 /** The left panel: every source in the app, searchable, draggable onto the
  * timeline. Doubles as the intro/outro/clip import point (button + OS drop). */
@@ -24,6 +26,8 @@ export function MediaBin() {
 
   const visible = media.clips.filter((c) => {
     if (filter === "voices" && c.kind !== "voice") return false;
+    if (filter === "music" && c.kind !== "music") return false;
+    if (filter === "sfx" && c.kind !== "sfx") return false;
     if (filter === "io" && c.kind !== "intro" && c.kind !== "outro") return false;
     if (filter === "clips" && c.kind !== "clip") return false;
     if (filter === "outputs" && c.kind !== "output") return false;
@@ -54,7 +58,7 @@ export function MediaBin() {
 
   return (
     <div
-      className="flex h-full flex-col gap-2 border-r border-ink-700 bg-ink-900 p-3"
+      className="flex h-full flex-col gap-3 border-r bg-card p-3"
       onDragOver={(e) => {
         if (e.dataTransfer.types.includes("Files")) e.preventDefault();
       }}
@@ -66,7 +70,7 @@ export function MediaBin() {
       }}
     >
       <div className="flex items-center justify-between">
-        <h2 className="text-[13px] font-medium text-white">Media</h2>
+        <h2 className="text-[13px] font-medium text-foreground">Media</h2>
         <IconButton label="Import audio file" onClick={() => setImporting((v) => !v)}>
           <PlusIcon />
         </IconButton>
@@ -75,28 +79,30 @@ export function MediaBin() {
       {importing && <ImportForm onDone={() => setImporting(false)} />}
 
       <div className="relative">
-        <SearchIcon className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-ink-400" />
-        <input
+        <SearchIcon className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
+        <Input
           value={query}
           placeholder="Search…"
           onChange={(e) => setQuery(e.target.value)}
-          className="w-full rounded-md border border-white/10 bg-white/[0.02] py-1.5 pl-8 pr-2 text-[13px] text-ink-200 placeholder:text-ink-400 focus:border-ink-200 focus:outline-none"
+          className="h-8 pl-8"
         />
       </div>
-      <Segmented
-        className="w-full flex-wrap [&>button]:flex-1"
-        options={[
-          { value: "all", label: "All" },
-          { value: "voices", label: "Voice" },
-          { value: "io", label: "Intro/Outro" },
-          { value: "clips", label: "Clips" },
-          { value: "outputs", label: "Out" },
-        ]}
+      <OptionSelect
+        size="sm"
         value={filter}
-        onChange={setFilter}
+        onChange={(value) => setFilter(value as Filter)}
+        options={[
+          { value: "all", label: "All media" },
+          { value: "voices", label: "Voices" },
+          { value: "music", label: "Music" },
+          { value: "sfx", label: "Sound FX" },
+          { value: "io", label: "Intros & outros" },
+          { value: "clips", label: "Clips" },
+          { value: "outputs", label: "Exports" },
+        ]}
       />
 
-      <div className="min-h-0 flex-1 space-y-1 overflow-y-auto">
+      <div className="min-h-0 flex-1 divide-y overflow-y-auto border-y">
         {visible.length === 0 ? (
           <Empty>Nothing here yet — drop an audio file to import it.</Empty>
         ) : (
@@ -168,32 +174,30 @@ function ImportForm({ onDone }: { onDone: () => void }) {
   }
 
   return (
-    <form onSubmit={upload} className="space-y-1.5 rounded-md border border-ink-700 bg-white/[0.02] p-2">
+    <form onSubmit={upload} className="space-y-2 border-b pb-3">
       <div className="flex gap-1.5">
-        <input
+        <Input
           value={name}
           onChange={(e) => setName(e.target.value)}
           placeholder="Name (optional)"
-          className="min-w-0 flex-1 rounded border border-white/10 bg-transparent px-2 py-1 text-[12px] text-ink-200 focus:outline-none"
+          className="h-8 min-w-0 flex-1"
         />
-        <select
+        <OptionSelect
+          size="sm"
+          className="w-24"
           value={kind}
-          onChange={(e) => setKind(e.target.value as typeof kind)}
-          className="rounded border border-white/10 bg-ink-900 px-1.5 py-1 text-[12px] text-ink-200"
-        >
-          <option value="clip">Clip</option>
-          <option value="intro">Intro</option>
-          <option value="outro">Outro</option>
-        </select>
+          onChange={(value) => setKind(value as typeof kind)}
+          options={[
+            { value: "clip", label: "Clip" },
+            { value: "intro", label: "Intro" },
+            { value: "outro", label: "Outro" },
+          ]}
+        />
       </div>
-      <input type="file" name="file" accept="audio/*" className="w-full text-[11px] text-ink-400" />
-      <button
-        type="submit"
-        disabled={busy}
-        className="w-full rounded bg-accent px-2 py-1 text-[12px] font-medium text-ink-950 disabled:opacity-40"
-      >
+      <Input type="file" name="file" accept="audio/*" className="h-8 text-xs" />
+      <Button type="submit" size="sm" className="w-full" disabled={busy}>
         {busy ? "Uploading…" : "Add"}
-      </button>
+      </Button>
     </form>
   );
 }

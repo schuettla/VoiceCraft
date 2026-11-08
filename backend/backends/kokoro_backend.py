@@ -11,7 +11,7 @@ import logging
 from importlib.util import find_spec
 from pathlib import Path
 
-import config
+import catalog
 from backends.base import BackendUnavailable, SynthesisResult, VoiceSpec
 
 log = logging.getLogger(__name__)
@@ -49,6 +49,7 @@ def _lang_code(language: str, voice: str) -> str:
 class KokoroBackend:
     name = "kokoro"
     supports_cloning = False
+    optional = False
 
     def __init__(self) -> None:
         self._pipelines: dict[str, object] = {}
@@ -74,7 +75,7 @@ class KokoroBackend:
             )
         from kokoro import KPipeline  # noqa: PLC0415 - deliberately lazy
 
-        repo_id = config.kokoro_model_id()
+        repo_id = catalog.active_repo_id("kokoro")
         log.info("loading Kokoro pipeline (lang_code=%s, repo=%s)", lang_code, repo_id)
         pipeline = KPipeline(lang_code=lang_code, repo_id=repo_id)
         self._pipelines[lang_code] = pipeline

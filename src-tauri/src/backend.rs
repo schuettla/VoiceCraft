@@ -43,6 +43,12 @@ pub fn start(app: &AppHandle) -> Result<(), String> {
         }
     }
 
+    // An outdated runtime is rebuilt by setup, which must be able to replace
+    // the venv's files — so don't hold them open with a running backend.
+    if setup::needs_runtime_update() {
+        return Err("The engine runtime needs an update — run setup first.".to_string());
+    }
+
     let args = vec![
         "--parent-pid".to_string(),
         std::process::id().to_string(),
@@ -100,6 +106,9 @@ fn spawn_python(app: &AppHandle, args: &[String]) -> Result<Spawned, String> {
     command_args.extend_from_slice(args);
 
     let mut env: HashMap<String, String> = setup::child_env().into_iter().collect();
+    // Some engines read bundled JSON/text files without an encoding and crash
+    // under Windows' cp1252 default (KittenTTS 2 does, in `_load_voices`).
+    env.insert("PYTHONUTF8".into(), "1".into());
     if let Some(ffmpeg) = setup::find_ffmpeg() {
         // The bundled ffmpeg isn't on PATH, so hand the backend its location.
         if let Some(dir) = ffmpeg.parent() {

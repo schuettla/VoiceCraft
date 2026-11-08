@@ -1,10 +1,16 @@
-import type {
+import type { Resources,
   Asset,
+  AudioEngine,
   AudioFormat,
+  AudioKind,
   CleanupResult,
   EffectSpec,
+  Engine,
   Generation,
+  GenerationKind,
   Health,
+  HfTokenStatus,
+  KittenStyle,
   LoudnessReport,
   Models,
   Preferences,
@@ -76,7 +82,9 @@ export const api = {
   health: () => request<Health>("/api/health"),
 
   listProfiles: () => request<Profile[]>("/api/profiles"),
-  kokoroVoices: () => request<string[]>("/api/profiles/voices"),
+  /** Built-in voices an engine offers for preset profiles (qwen has none). */
+  presetVoices: (engine: Engine) =>
+    request<string[]>(`/api/profiles/voices?engine=${engine}`),
   createProfile: (form: FormData) =>
     request<Profile>("/api/profiles", { method: "POST", body: form }),
   deleteProfile: (id: string) =>
@@ -88,13 +96,37 @@ export const api = {
   previewVoice: (id: string) =>
     request<Generation>(`/api/profiles/${id}/preview`, { method: "POST" }),
 
-  listGenerations: (limit?: number) =>
-    request<Generation[]>(`/api/generations${limit ? `?limit=${limit}` : ""}`),
+  listGenerations: (limit?: number, kind?: GenerationKind) => {
+    const query = new URLSearchParams();
+    if (limit) query.set("limit", String(limit));
+    if (kind) query.set("kind", kind);
+    const text = query.toString();
+    return request<Generation[]>(`/api/generations${text ? `?${text}` : ""}`);
+  },
+  /** Music and sound-effect engines, with install / hardware state. */
+  listAudioEngines: () => request<AudioEngine[]>("/api/audio-engines"),
+  /** Queue a music or SFX job. Returns one queued row per take. */
+  generateAudio: (body: {
+    kind: AudioKind;
+    engine?: string;
+    prompt: string;
+    duration_seconds: number;
+    lyrics?: string;
+    seed?: number;
+    steps?: number;
+    guidance?: number;
+    /** Sound effects only, 1–4. */
+    takes?: number;
+    output_format?: AudioFormat;
+  }) => request<Generation[]>("/api/generations/audio", json(body)),
   generate: (body: {
     profile_id: string;
     text: string;
     speed?: number;
     output_format?: AudioFormat;
+    /** KittenTTS 2 only; other engines ignore them. */
+    preset?: KittenStyle;
+    seed?: number;
   }) => request<Generation>("/api/generations", json(body)),
   getGeneration: (id: string) => request<Generation>(`/api/generations/${id}`),
   deleteGeneration: (id: string) =>
@@ -112,6 +144,11 @@ export const api = {
   deleteModel: (id: string) =>
     request<Models>(`/api/models/${id}`, { method: "DELETE" }),
   setModelsDir: (path: string) => request<Models>("/api/models/storage", json({ path })),
+  /** Whether a Hugging Face token is available for gated downloads. Never the token. */
+  hfTokenStatus: () => request<HfTokenStatus>("/api/models/hf-token"),
+  saveHfToken: (token: string) =>
+    request<HfTokenStatus>("/api/models/hf-token", { ...json({ token }), method: "PUT" }),
+  clearHfToken: () => request<HfTokenStatus>("/api/models/hf-token", { method: "DELETE" }),
   openModelsDir: () =>
     request<void>("/api/models/storage/open", { method: "POST" }),
 
@@ -219,6 +256,7 @@ export const api = {
     request<void>(`/api/edit/render/${jobId}/cancel`, { method: "POST" }),
 
   settings: () => request<Settings>("/api/settings"),
+  resources: () => request<Resources>("/api/settings/resources"),
   savePreferences: (preferences: Preferences) =>
     request<Settings>("/api/settings/preferences", {
       method: "PUT",

@@ -1,32 +1,69 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "../lib/api";
-import type { AudioFormat, Generation, Health, Profile } from "../lib/types";
+import type {
+  AudioEngine,
+  AudioFormat,
+  Generation,
+  Health,
+  KittenStyle,
+  Profile,
+} from "../lib/types";
 import { AUDIO_FORMATS, formatDuration, formatWhen, truncate } from "../lib/format";
 import { usePreferences } from "../lib/preferences";
+import { useRemembered } from "../lib/remember";
+import { KindIcon } from "../components/KindIcon";
+import { MusicForm } from "../components/MusicForm";
+import { SoundFxForm } from "../components/SoundFxForm";
 import { useToast } from "../components/Toaster";
 import { TrackRow } from "../components/TrackRow";
 import {
   Badge,
-  Button,
   Empty,
   Field,
   IconButton,
   Notice,
-  Panel,
-  Select,
-  Textarea,
-} from "../components/ui";
-import { DownloadIcon, FolderIcon, TrashIcon } from "../components/icons";
+  OptionSelect,
+  PageHeader,
+  Section,
+  Segmented,
+} from "../components/common";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Separator } from "@/components/ui/separator";
+import { Slider } from "@/components/ui/slider";
+import { Textarea } from "@/components/ui/textarea";
+import { DownloadIcon, FolderIcon, SpinnerIcon, TrashIcon } from "../components/icons";
 
 const ACTIVE: Generation["status"][] = ["queued", "processing"];
 
-export function GeneratePage({ health }: { health: Health | null }) {
+/** What the page makes: speech from a script, or a prompt for music / an effect. */
+const MODES = ["speech", "music", "sfx"] as const;
+type Mode = (typeof MODES)[number];
+
+const MODE_DESCRIPTION: Record<Mode, string> = {
+  speech: "Write a script and speak it in one of your voices.",
+  music: "Describe a style, add lyrics if you like, and get a song.",
+  sfx: "Describe a sound and get an effect or an ambience.",
+};
+
+export function GeneratePage({
+  health,
+  onOpenModels,
+}: {
+  health: Health | null;
+  /** Take the user to the Models page (install an engine, download weights). */
+  onOpenModels: () => void;
+}) {
   const toast = useToast();
+  const [mode, setMode] = useRemembered<Mode>("voicecraft.generate.mode", "speech", MODES);
+  const [engines, setEngines] = useState<AudioEngine[] | null>(null);
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [generations, setGenerations] = useState<Generation[]>([]);
   const [profileId, setProfileId] = useState("");
   const [text, setText] = useState("");
   const [speed, setSpeed] = useState(1);
+  const [style, setStyle] = useState<KittenStyle>("stable");
+  const [seed, setSeed] = useState("");
   const [busy, setBusy] = useState(false);
   // The engines produce WAV; picking another format transcodes it with ffmpeg
   // as part of the job, so the file that lands is the one asked for.
@@ -53,6 +90,20 @@ export function GeneratePage({ health }: { health: Health | null }) {
     void refresh();
   }, [refresh, toast]);
 
+  // The engine list is what decides between the form and the install card, and
+  // it changes on the Models page. Re-read it whenever Music or Sound FX opens.
+  useEffect(() => {
+    if (mode === "speech") return;
+    let current = true;
+    api
+      .listAudioEngines()
+      .then((list) => current && setEngines(list))
+      .catch(() => current && setEngines([])); // an unreachable backend is shown by the header
+    return () => {
+      current = false;
+    };
+  }, [mode]);
+
   const pending = useMemo(
     () => generations.some((generation) => ACTIVE.includes(generation.status)),
     [generations],
@@ -65,8 +116,14 @@ export function GeneratePage({ health }: { health: Health | null }) {
     return () => window.clearInterval(timer);
   }, [pending, refresh]);
 
+  const queued = useCallback(
+    (rows: Generation[]) => setGenerations((current) => [...rows, ...current]),
+    [],
+  );
+
   const profile = profiles.find((item) => item.id === profileId);
   const engineStatus = health?.engines.find((item) => item.name === profile?.engine);
+  const kitten = profile?.engine === "kitten";
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
@@ -76,8 +133,10 @@ export function GeneratePage({ health }: { health: Health | null }) {
       const generation = await api.generate({
         profile_id: profileId,
         text,
-        speed,
+        speed: kitten ? 1 : speed,
         output_format: format,
+        // Only KittenTTS 2 reads these; the backend ignores them elsewhere.
+        ...(kitten ? { preset: style, ...(seed ? { seed: Number(seed) } : {}) } : {}),
       });
       setGenerations((current) => [generation, ...current]);
       toast("Generation queued", "success");
@@ -95,86 +154,158 @@ export function GeneratePage({ health }: { health: Health | null }) {
   );
 
   return (
-    <div className="mx-auto grid max-w-6xl gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(0,380px)]">
-      <Panel title="Script" subtitle="Paste the text to speak in the selected voice">
-        <form onSubmit={submit} className="space-y-4">
-          <Field label="Voice profile">
-            <Select
+    <>
+      <PageHeader
+        title="Generate"
+        description={MODE_DESCRIPTION[mode]}
+        actions={
+          <Segmented
+            value={mode}
+            onChange={setMode}
+            options={[
+              { value: "speech", label: "Voice" },
+              { value: "music", label: "Music" },
+              { value: "sfx", label: "Sound FX" },
+            ]}
+          />
+        }
+      />
+
+      {mode === "music" && (
+        <MusicForm
+          engines={engines?.filter((item) => item.kind === "music") ?? null}
+          loading={engines === null}
+          format={format}
+          onFormat={setFormat}
+          onQueued={queued}
+          onOpenModels={onOpenModels}
+        />
+      )}
+
+      {mode === "sfx" && (
+        <SoundFxForm
+          engines={engines?.filter((item) => item.kind === "sfx") ?? null}
+          loading={engines === null}
+          format={format}
+          onFormat={setFormat}
+          onQueued={queued}
+          onOpenModels={onOpenModels}
+        />
+      )}
+
+      <form onSubmit={submit} className={mode === "speech" ? "space-y-5" : "hidden"}>
+        <div className="grid gap-4 sm:grid-cols-[minmax(0,1fr)_7rem]">
+          <Field label="Voice">
+            <OptionSelect
               value={profileId}
-              onChange={(e) => setProfileId(e.target.value)}
+              onChange={setProfileId}
               disabled={profiles.length === 0}
-            >
-              {profiles.length === 0 && <option value="">No profiles yet</option>}
-              {profiles.map((item) => (
-                <option key={item.id} value={item.id}>
-                  {item.name} — {item.engine}
-                  {item.preset_voice ? ` (${item.preset_voice})` : ""}
-                </option>
-              ))}
-            </Select>
-          </Field>
-
-          {engineStatus && !engineStatus.available && (
-            <Notice tone="bad">
-              {engineStatus.name} is not installed, so this generation will fail.
-              See backend/README.md for the install command.
-            </Notice>
-          )}
-          {profile?.engine === "qwen" && engineStatus?.device === "cpu" && (
-            <Notice tone="warn">
-              CUDA unavailable — Qwen3-TTS is running on CPU and will be slow.
-            </Notice>
-          )}
-
-          <Field label="Text">
-            <Textarea
-              rows={12}
-              required
-              value={text}
-              placeholder="Welcome back to the show…"
-              onChange={(e) => setText(e.target.value)}
+              placeholder="No profiles yet"
+              options={profiles.map((item) => ({
+                value: item.id,
+                label: `${item.name} — ${item.engine}${item.preset_voice ? ` (${item.preset_voice})` : ""}`,
+              }))}
             />
           </Field>
-
-          <Field label={`Speed — ${speed.toFixed(2)}×`}>
-            <input
-              type="range"
-              min={0.5}
-              max={2}
-              step={0.05}
-              value={speed}
-              onChange={(e) => setSpeed(Number(e.target.value))}
-              className="w-full accent-accent"
+          <Field label="Format">
+            <OptionSelect
+              value={format}
+              onChange={(value) => setFormat(value as AudioFormat)}
+              options={AUDIO_FORMATS.map((value) => ({
+                value,
+                label: value.toUpperCase(),
+              }))}
             />
           </Field>
+        </div>
 
-          <div className="flex items-end gap-3 border-t border-ink-700 pt-4">
-            <div className="w-28">
-              <Field label="Format">
-                <Select
-                  value={format}
-                  onChange={(e) => setFormat(e.target.value as AudioFormat)}
-                >
-                  {AUDIO_FORMATS.map((value) => (
-                    <option key={value} value={value}>
-                      {value.toUpperCase()}
-                    </option>
-                  ))}
-                </Select>
+        {engineStatus && !engineStatus.available && (
+          <Notice tone="bad">
+            {engineStatus.name} is not installed, so this generation will fail.
+            See backend/README.md for the install command.
+          </Notice>
+        )}
+        {profile?.engine === "qwen" && engineStatus?.device === "cpu" && (
+          <Notice tone="warn">
+            CUDA unavailable — Qwen3-TTS is running on CPU and will be slow.
+          </Notice>
+        )}
+        {kitten && engineStatus?.device === "cpu" && (
+          <Notice tone="warn">
+            CUDA unavailable — KittenTTS 2 is running on CPU, about 15× slower than real
+            time. A short line takes a minute or more.
+          </Notice>
+        )}
+
+        <Field label="Script">
+          <Textarea
+            rows={12}
+            required
+            value={text}
+            placeholder="Welcome back to the show…"
+            onChange={(e) => setText(e.target.value)}
+            className="min-h-64 resize-y text-[15px] leading-relaxed"
+          />
+        </Field>
+
+        {kitten && (
+          <div className="space-y-2">
+            <div className="grid gap-4 sm:grid-cols-[minmax(0,12rem)_minmax(0,10rem)]">
+              <Field label="Style" hint="Expressive is livelier but a little less steady.">
+                <OptionSelect
+                  value={style}
+                  onChange={(value) => setStyle(value as KittenStyle)}
+                  options={[
+                    { value: "stable", label: "Stable" },
+                    { value: "expressive", label: "Expressive" },
+                  ]}
+                />
+              </Field>
+              <Field label="Seed (optional)" hint="Same seed, same take.">
+                <Input
+                  value={seed}
+                  inputMode="numeric"
+                  placeholder="random"
+                  onChange={(e) => setSeed(e.target.value.replace(/\D/g, "").slice(0, 9))}
+                />
               </Field>
             </div>
-            <span className="pb-2 text-[13px] text-ink-400">{words} words</span>
-            <Button
-              type="submit"
-              variant="primary"
-              className="ml-auto"
-              disabled={busy || !profileId || !text.trim()}
-            >
-              {busy ? "Queueing…" : "Generate"}
-            </Button>
+            <p className="text-xs text-muted-foreground">
+              Tags: start a line with an emotion like <code>[joyful]</code>, add sounds such
+              as <code>&lt;laugh&gt;</code>, and stress a word with <code>(((word)))</code>.
+            </p>
           </div>
-        </form>
-      </Panel>
+        )}
+
+        <div className="flex items-center gap-6">
+          {kitten ? (
+            // KittenTTS 2 has no speed control; saying so beats a slider that does nothing.
+            <p className="w-64 text-xs text-muted-foreground">
+              KittenTTS 2 sets its own pace — there is no speed control.
+            </p>
+          ) : (
+            <Field label={`Speed — ${speed.toFixed(2)}×`} className="w-64">
+              <Slider
+                min={0.5}
+                max={2}
+                step={0.05}
+                value={[speed]}
+                onValueChange={([next]) => setSpeed(next)}
+                className="py-2"
+              />
+            </Field>
+          )}
+          <span className="ml-auto self-end pb-2 text-[13px] tabular-nums text-muted-foreground">
+            {words} {words === 1 ? "word" : "words"}
+          </span>
+          <Button type="submit" className="self-end" disabled={busy || !profileId || !text.trim()}>
+            {busy && <SpinnerIcon />}
+            {busy ? "Queueing…" : "Generate"}
+          </Button>
+        </div>
+      </form>
+
+      <Separator className="my-8" />
 
       <SessionPanel
         generations={generations}
@@ -182,7 +313,7 @@ export function GeneratePage({ health }: { health: Health | null }) {
         exportFormat={preferences.default_output_format}
         onChanged={refresh}
       />
-    </div>
+    </>
   );
 }
 
@@ -231,36 +362,36 @@ function SessionPanel({
   }
 
   return (
-    <Panel
+    <Section
       title="This session"
-      subtitle={
+      description={
         generations.length
           ? `${generations.length} generation${generations.length === 1 ? "" : "s"} · newest first`
           : "Results land here as they finish"
       }
     >
       {recent.length === 0 ? (
-        <Empty>Nothing generated yet — write a script and press Generate.</Empty>
+        <Empty>Nothing generated yet — write a script or describe a sound, then press Generate.</Empty>
       ) : (
-        <div className="space-y-1">
+        <div className="divide-y border-y">
           {running.map((g) => (
             <TrackRow
               key={g.id}
               busy
+              leading={<KindIcon kind={g.kind} />}
               title={truncate(g.text, 90)}
               meta={g.status === "processing" ? "Generating…" : "Queued"}
               badge={<Badge tone="busy">{g.status}</Badge>}
             />
           ))}
-          {running.length > 0 && rest.length > 0 && (
-            <div className="my-2 border-t border-ink-700" />
-          )}
           {rest.map((g) => {
             const done = g.status === "completed" && !!g.audio_path;
-            const who = g.profile_id ? names.get(g.profile_id) : undefined;
+            // The voice's name belongs to speech; music and effects have none.
+            const who = g.kind === "speech" && g.profile_id ? names.get(g.profile_id) : undefined;
             return (
               <TrackRow
                 key={g.id}
+                leading={<KindIcon kind={g.kind} />}
                 track={
                   done
                     ? {
@@ -319,6 +450,6 @@ function SessionPanel({
           })}
         </div>
       )}
-    </Panel>
+    </Section>
   );
 }

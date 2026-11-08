@@ -18,7 +18,13 @@ import { useToast } from "../components/Toaster";
  * the media bin, the timeline (drag sources), and the intro/outro pickers
  * all read one list. */
 
-export type MediaKind = "voice" | "intro" | "outro" | "clip" | "output";
+export type MediaKind = "voice" | "music" | "sfx" | "intro" | "outro" | "clip" | "output";
+
+/** The media kind of a generation: speech is a "voice", music and sound
+ * effects keep their own kind so the bin can label and filter them. */
+function generationKind(kind: Generation["kind"]): MediaKind {
+  return kind === "music" || kind === "sfx" ? kind : "voice";
+}
 
 export type MediaClip = {
   key: string; // "g:<id>" | "a:<id>"
@@ -37,6 +43,8 @@ export function decodeKey(key: string): SourceRef {
 
 export const MEDIA_KIND_LABEL: Record<MediaKind, string> = {
   voice: "voice",
+  music: "music",
+  sfx: "sound fx",
   intro: "intro",
   outro: "outro",
   clip: "clip",
@@ -88,7 +96,7 @@ export function MediaProvider({ children }: { children: ReactNode }) {
     () => [
       ...generations.map<MediaClip>((g) => ({
         key: `g:${g.id}`,
-        kind: "voice",
+        kind: generationKind(g.kind),
         title: truncate(g.text, 80),
         path: g.audio_path!,
         duration: g.duration_seconds,

@@ -94,6 +94,26 @@ def probe_duration(path: str | Path) -> float | None:
         return None
 
 
+def load_reference(path: str | Path) -> tuple:
+    """Decode a reference clip to mono float32, peak-normalized.
+
+    Cloning engines (Qwen3-TTS, KittenTTS) are better handed a
+    `(samples, rate)` tuple than a path: it lets us fix the two things that
+    upset them — stereo input, and clips that decode above 1.0 (which the
+    models warn about and which skews the speaker embedding).
+    """
+    import numpy as np  # noqa: PLC0415 - keeps ffmpeg-only callers light
+    import soundfile as sf  # noqa: PLC0415
+
+    samples, rate = sf.read(str(path), dtype="float32", always_2d=False)
+    if samples.ndim > 1:
+        samples = samples.mean(axis=1)
+    peak = float(np.max(np.abs(samples))) if samples.size else 0.0
+    if peak > 0:
+        samples = samples * (0.95 / peak)
+    return np.ascontiguousarray(samples, dtype="float32"), int(rate)
+
+
 def normalize(src: str | Path, dst: str | Path) -> Path:
     """Re-encode to the common intermediate WAV.
 
