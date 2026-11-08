@@ -34,6 +34,7 @@ import config  # noqa: E402
 from backends import _REGISTRY, AudioSpec, audio_backends  # noqa: E402
 from backends import device as devices  # noqa: E402
 from backends.audio_engines import (  # noqa: E402
+    ACESTEP_DIT_DIRS,
     ACESTEP_MAX_SECONDS,
     GIB,
     AceStepBackend,
@@ -104,9 +105,17 @@ def test_catalog() -> None:
           and catalog.engines_for("sfx") == ("moss_sfx", "sa3_sfx"))
 
     audio_specs = [s for s in catalog.MODELS if s.category in ("music", "sfx")]
-    check("six audio entries", {s.id for s in audio_specs} == {
-        "acestep-1.5-turbo", "acestep-1.5-sft", "acestep-1.5-xl-turbo", "moss-sfx-v2",
-        "sa3-small-music", "sa3-small-sfx"})
+    check("ten audio entries", {s.id for s in audio_specs} == {
+        "acestep-1.5-turbo", "acestep-1.5-sft", "acestep-1.5-base", "acestep-1.5-xl-turbo",
+        "acestep-1.5-xl-sft", "acestep-1.5-xl-base", "moss-sfx-v2",
+        "sa3-small-music", "sa3-medium-music", "sa3-small-sfx"})
+    ace_specs = [s for s in audio_specs if s.engine == "acestep"]
+    check("every ACE-Step entry has a checkpoint folder the engine can start",
+          all(s.id in ACESTEP_DIT_DIRS for s in ace_specs), str([s.id for s in ace_specs]))
+    check("each folder is named after its repository",
+          all(ACESTEP_DIT_DIRS[s.id] == s.repo_id.split("/")[-1] for s in ace_specs if s.repo_id != catalog.ACESTEP_REPO))
+    check("every variant outside the turbo repo borrows the VAE and text encoder from it",
+          all(s.extra_files == catalog.ACESTEP_SHARED for s in ace_specs if s.repo_id != catalog.ACESTEP_REPO))
     check("all are on-demand engines with a license link",
           all(s.optional_engine and s.license_url for s in audio_specs))
     open_specs = [s for s in audio_specs if not s.engine.startswith("sa3_")]
@@ -153,7 +162,7 @@ def test_attributions() -> None:
     repos = {spec.repo_id for spec in catalog.MODELS}
     sources = re.findall(r'sourceUrl: "https://huggingface\.co/([^"]+)"', text)
     check("every model page link points at a catalog repo",
-          len(sources) == 7 and all(repo in repos for repo in sources), str(sources))
+          len(sources) == 8 and all(repo in repos for repo in sources), str(sources))
     check("both Stable Audio 3 repos have a model page link",
           {catalog.SA3_REPO_MUSIC, catalog.SA3_REPO_SFX} <= set(sources))
 
@@ -712,6 +721,13 @@ def test_acestep_adapter() -> None:
         check("turbo defaults: 8 steps, guidance 1", ace.defaults() == (8, 1.0), str(ace.defaults()))
         use_model("acestep-1.5-sft")
         check("sft defaults: 50 steps, guidance 7", ace.defaults() == (50, 7.0), str(ace.defaults()))
+        for model_id in ("acestep-1.5-base", "acestep-1.5-xl-sft", "acestep-1.5-xl-base"):
+            use_model(model_id)
+            check(f"{model_id} defaults: 50 steps, guidance 7 (not a turbo model)",
+                  ace.defaults() == (50, 7.0), str(ace.defaults()))
+        use_model("acestep-1.5-xl-turbo")
+        check("xl-turbo defaults: 8 steps, guidance 1", ace.defaults() == (8, 1.0), str(ace.defaults()))
+        use_model("acestep-1.5-sft")
         use_model("acestep-1.5-turbo")
 
         ace.load()
@@ -1070,7 +1086,7 @@ def test_api() -> None:
                   row["kind"] == "sfx" and row["engine"] == "moss_sfx" and row["profile_id"] is None)
             check("the prompt is the text and the options are in params",
                   row["text"] == body["prompt"]
-                  and row["params"] == {"duration_seconds": 3, "seed": 7, "steps": 12, "guidance": 4.5}, str(row["params"]))
+                  and row["params"] == {"duration_seconds": 3, "model": "moss-sfx-v2", "seed": 7, "steps": 12, "guidance": 4.5}, str(row["params"]))
             done = _wait_for(client, row["id"])
             check("the job completed", done["status"] == "completed", str(done))
             path = Path(done["audio_path"])
@@ -1133,6 +1149,98 @@ def test_api() -> None:
             else:
                 print("  SKIP  mp3 transcode (ffmpeg not found)")
 
+            print("api: starting from an existing clip (variation / extend / replace)")
+            rows = {r["name"]: r for r in client.get("/api/audio-engines").json()}
+            check("only the Stable Audio 3 engines report that they can edit",
+                  [rows[n]["editing"] for n in ("acestep", "sa3_music", "moss_sfx", "sa3_sfx")] == [False, True, False, True])
+            editor = SineEngine("sa3_music", "music", "Stable Audio 3 Small")
+            editor.supports_editing = True
+            real_sa3 = _REGISTRY.get("sa3_music")
+            _REGISTRY["sa3_music"] = editor
+            downloaded.add("sa3_music")
+            source_row = _wait_for(client, instrumental["id"])   # a finished 12 s clip
+            source_path = source_row["audio_path"]
+            clip = {"kind": "music", "engine": "sa3_music", "prompt": "same groove, brighter", "duration_seconds": 12}
+
+            def edit(mode: str, **fields) -> dict:
+                return {"mode": mode, "generation_id": instrumental["id"], **fields}
+
+            r = client.post("/api/generations/audio", json={**clip, "duration_seconds": 3,
+                                                           "edit": edit("variation", strength=0.3)})
+            check("a variation is accepted, and a music clip may be shorter than 10 s when it edits",
+                  r.status_code == 202, r.text)
+            varied = r.json()[0]
+            check("the row records the edit and its source, and the length is the clip's own",
+                  {k: v for k, v in varied["params"].items() if k not in ("duration_seconds", "model")}
+                  == {"edit": "variation", "source": instrumental["id"], "strength": 0.3}
+                  and abs(varied["params"]["duration_seconds"] - 12) < 0.05, str(varied["params"]))
+            check("the job completes", _wait_for(client, varied["id"])["status"] == "completed")
+            spec = editor.specs[-1]
+            check("the engine is told: variation, the source file, how far it may move",
+                  (spec.edit, spec.source_path, spec.strength, spec.region) == ("variation", source_path, 0.3, None)
+                  and abs(spec.duration_seconds - 12) < 0.05, str(spec))
+
+            r = client.post("/api/generations/audio", json={**clip, "duration_seconds": 20, "edit": edit("extend")})
+            check("an extension keeps the asked length", r.status_code == 202 and r.json()[0]["params"]["duration_seconds"] == 20, r.text)
+            done = _wait_for(client, r.json()[0]["id"])
+            check("…and the engine gets it as the result's length",
+                  editor.specs[-1].edit == "extend" and editor.specs[-1].duration_seconds == 20
+                  and abs(done["duration_seconds"] - 20) < 0.05, str(editor.specs[-1]))
+            r = client.post("/api/generations/audio", json={**clip, "duration_seconds": 12.5, "edit": edit("extend")})
+            check("an extension that adds under a second is refused with the numbers",
+                  r.status_code == 400 and "already 12" in r.text, r.text)
+
+            r = client.post("/api/generations/audio", json={**clip, "edit": edit("replace", start_seconds=2, end_seconds=5)})
+            check("replacing a part is accepted and recorded as a region",
+                  r.status_code == 202 and r.json()[0]["params"]["region"] == [2, 5], r.text)
+            _wait_for(client, r.json()[0]["id"])
+            check("the engine gets the region and the clip's own length",
+                  editor.specs[-1].edit == "replace" and editor.specs[-1].region == (2.0, 5.0)
+                  and abs(editor.specs[-1].duration_seconds - 12) < 0.05, str(editor.specs[-1]))
+            r = client.post("/api/generations/audio", json={**clip, "edit": edit("replace", start_seconds=8, end_seconds=99)})
+            _wait_for(client, r.json()[0]["id"])
+            check("a region running past the end is cut at the end of the clip",
+                  r.status_code == 202 and editor.specs[-1].region[0] == 8.0 and abs(editor.specs[-1].region[1] - 12) < 0.05,
+                  str(editor.specs[-1].region))
+            r = client.post("/api/generations/audio", json={**clip, "edit": edit("replace", start_seconds=30, end_seconds=33)})
+            check("a region wholly outside the clip is refused", r.status_code == 400 and "outside the clip" in r.text, r.text)
+
+            r = client.post("/api/generations/audio", json={**clip, "engine": None, "edit": edit("variation")})
+            check("an edit with no engine named goes to the engine that can edit, not the default",
+                  r.status_code == 202 and r.json()[0]["engine"] == "sa3_music", r.text)
+            _wait_for(client, r.json()[0]["id"])
+            r = client.post("/api/generations/audio", json={**clip, "engine": "acestep", "edit": edit("variation")})
+            check("an engine that can't edit says so and names one that can",
+                  r.status_code == 400 and "can't start from an existing clip" in r.text and "Stable Audio 3 Small" in r.text, r.text)
+            r = client.post("/api/generations/audio", json={**clip, "edit": {"mode": "variation", "generation_id": "nope"}})
+            check("a clip that no longer exists is a 400", r.status_code == 400 and "no longer exists" in r.text, r.text)
+            running = client.post("/api/generations/audio", json={**body, "duration_seconds": 1}).json()[0]
+            r = client.post("/api/generations/audio", json={**clip, "edit": {"mode": "variation", "generation_id": running["id"]}})
+            _wait_for(client, running["id"])
+            check("a clip that is not finished can't be a source (or, if it just finished, is accepted)",
+                  (r.status_code == 400 and "no finished audio" in r.text) or r.status_code == 202, r.text)
+
+            editor.support_value = Support(True, max_duration_seconds=10)
+            r = client.post("/api/generations/audio", json={**clip, "edit": edit("variation")})
+            check("a clip longer than this machine can edit names the limit",
+                  r.status_code == 400 and "at most 10 seconds" in r.text, r.text)
+            editor.support_value = Support(True)
+
+            for label, edit_body in {
+                "both a generation and an asset": {"mode": "variation", "generation_id": "a", "asset_id": "b"},
+                "neither": {"mode": "variation"},
+                "replace without a region": {"mode": "replace", "generation_id": "a"},
+                "a region that ends before it starts": {"mode": "replace", "generation_id": "a", "start_seconds": 5, "end_seconds": 4},
+                "a region on a variation": {"mode": "variation", "generation_id": "a", "start_seconds": 1, "end_seconds": 2},
+                "strength 0": {"mode": "variation", "generation_id": "a", "strength": 0},
+                "strength above 1": {"mode": "variation", "generation_id": "a", "strength": 1.5},
+                "an unknown mode": {"mode": "remix", "generation_id": "a"},
+            }.items():
+                check(f"{label} -> 422",
+                      client.post("/api/generations/audio", json={**clip, "edit": edit_body}).status_code == 422)
+            _REGISTRY["sa3_music"] = real_sa3
+            downloaded.discard("sa3_music")
+
             print("api: failures and scheduling")
             moss.fail = "CUDA out of memory"
             failing = client.post("/api/generations/audio", json={**body, "duration_seconds": 2}).json()[0]
@@ -1166,6 +1274,18 @@ def test_api() -> None:
             check("health lists the audio engines as optional",
                   health["acestep"]["optional"] and health["moss_sfx"]["optional"] and not health["qwen"]["optional"])
             target = next(x for x in kinds["sfx"] if x["audio_path"])
+            check("generations start un-starred", target["favorite"] is False)
+            starred = client.patch(f"/api/generations/{target['id']}", json={"favorite": True})
+            check("PATCH stars a generation", starred.status_code == 200 and starred.json()["favorite"] is True)
+            check("the star survives a re-list",
+                  next(x for x in client.get("/api/generations", params={"limit": 500}).json()
+                       if x["id"] == target["id"])["favorite"] is True)
+            check("PATCH un-stars it",
+                  client.patch(f"/api/generations/{target['id']}", json={"favorite": False}).json()["favorite"] is False)
+            check("PATCH on an unknown id is a 404",
+                  client.patch("/api/generations/nope", json={"favorite": True}).status_code == 404)
+            check("PATCH without a favorite is rejected",
+                  client.patch(f"/api/generations/{target['id']}", json={}).status_code == 422)
             check("the file exists before the delete", Path(target["audio_path"]).is_file())
             check("deleting an audio generation removes its file",
                   client.delete(f"/api/generations/{target['id']}").status_code == 204
@@ -1175,6 +1295,63 @@ def test_api() -> None:
         _REGISTRY.update(saved)
         devices.hardware = real_hardware
         model_service.active_downloaded = real_downloaded
+
+
+def test_model_choice() -> None:
+    """A request may name the checkpoint (Phase 11): resolved, refused and switched to."""
+    print("model choice")
+    from models import AudioGenerateRequest
+    from services import audio_service, generation_service
+
+    def refused(**fields) -> str | None:
+        try:
+            audio_service._resolve_engine(AudioGenerateRequest(
+                prompt="x", duration_seconds=30, **{"kind": "music", **fields}))
+        except generation_service.GenerationError as exc:
+            return str(exc)
+        return None
+
+    check("nothing assumed: the default model is active", catalog.active_model("acestep").id == "acestep-1.5-turbo")
+    with catalog.assume_model("acestep-1.5-sft"):
+        check("assume_model answers for that model's engine",
+              catalog.active_model("acestep").id == "acestep-1.5-sft")
+        check("…and leaves other engines alone", catalog.active_model("moss_sfx").id == "moss-sfx-v2")
+    check("it is gone after the block and nothing was saved",
+          catalog.active_model("acestep").id == "acestep-1.5-turbo"
+          and not (config.load_settings().get("active_models") or {}))
+
+    name, _backend, spec = audio_service._resolve_engine(AudioGenerateRequest(
+        kind="music", prompt="x", duration_seconds=30, model_id="sa3-medium-music"))
+    check("a model names its engine", name == "sa3_music" and spec.id == "sa3-medium-music", f"{name} {spec}")
+    name, _backend, spec = audio_service._resolve_engine(AudioGenerateRequest(
+        kind="music", prompt="x", duration_seconds=30))
+    check("no model: the engine's active one", name == "acestep" and spec.id == "acestep-1.5-turbo")
+    check("an unknown model is refused", "unknown model" in (refused(model_id="nope") or ""))
+    check("a model of another engine than the one named is refused",
+          "belongs to" in (refused(model_id="acestep-1.5-sft", engine="sa3_music") or ""))
+    check("a sound-effect model can't make music",
+          "makes sfx, not music" in (refused(model_id="moss-sfx-v2") or ""))
+
+    info = audio_service.engine_info("sa3_music", _REGISTRY["sa3_music"])
+    ids = [m["id"] for m in info["models"]]
+    check("the engine lists every one of its models, default first",
+          ids == ["sa3-small-music", "sa3-medium-music"], str(ids))
+    check("exactly one is active", sum(m["active"] for m in info["models"]) == 1)
+    acestep = audio_service.engine_info("acestep", _REGISTRY["acestep"])
+    check("every ACE-Step entry is offered", len(acestep["models"]) == len(catalog.for_engine("acestep")))
+    base = next(m for m in acestep["models"] if m["id"] == "acestep-1.5-base")
+    turbo = next(m for m in acestep["models"] if m["id"] == "acestep-1.5-turbo")
+    check("defaults are per model (base 50 steps, turbo 8)",
+          base["default_steps"] == 50 and turbo["default_steps"] == 8, f"{base['default_steps']} {turbo['default_steps']}")
+
+    try:
+        generation_service._use_model("acestep-1.5-sft")
+        check("the worker makes the job's model the active one",
+              catalog.active_model("acestep").id == "acestep-1.5-sft")
+        generation_service._use_model(None)
+        check("a job with no model leaves the choice alone", catalog.active_model("acestep").id == "acestep-1.5-sft")
+    finally:
+        config.save_settings({"active_models": {}})
 
 
 def main() -> int:
@@ -1188,6 +1365,7 @@ def main() -> int:
     test_checkpoint_stage()
     test_acestep_adapter()
     test_moss_adapter()
+    test_model_choice()
     test_api()         # last: closing the TestClient shuts the worker executor down
     print(f"\n{PASSED} passed, {FAILED} failed  (data dir: {_DATA_DIR})")
     return 1 if FAILED else 0

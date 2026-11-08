@@ -32,8 +32,8 @@ export const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
   {
     label: "Create",
     items: [
-      { id: "profiles", label: "Profiles", hint: "Voices you can generate with", icon: UserRound },
       { id: "generate", label: "Generate", hint: "Voice, music and sound effects", icon: AudioLines },
+      { id: "profiles", label: "Profiles", hint: "Voices you can generate with", icon: UserRound },
     ],
   },
   {

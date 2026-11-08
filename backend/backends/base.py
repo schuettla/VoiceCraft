@@ -79,6 +79,12 @@ class AudioSpec:
     seed: int | None = None
     steps: int | None = None
     guidance: float | None = None
+    # Editing (Phase 10): start from `source_path` instead of from silence. Only
+    # engines with `supports_editing` read these; the service refuses the rest.
+    edit: str | None = None          # "variation" | "extend" | "replace"
+    source_path: str | None = None
+    strength: float | None = None    # variation: 1 = ignore the source
+    region: tuple[float, float] | None = None   # replace: seconds to regenerate
 
 
 @dataclass(frozen=True, slots=True)

@@ -51,7 +51,10 @@ ACESTEP_MIN_SECONDS = 10.0            # the engine's documented range is 10–60
 ACESTEP_DIT_DIRS = {
     "acestep-1.5-turbo": "acestep-v15-turbo",
     "acestep-1.5-sft": "acestep-v15-sft",
+    "acestep-1.5-base": "acestep-v15-base",
     "acestep-1.5-xl-turbo": "acestep-v15-xl-turbo",
+    "acestep-1.5-xl-sft": "acestep-v15-xl-sft",
+    "acestep-1.5-xl-base": "acestep-v15-xl-base",
 }
 ACESTEP_TURBO_MODELS = ("acestep-1.5-turbo", "acestep-1.5-xl-turbo")
 ACESTEP_TURBO_STEPS = 8

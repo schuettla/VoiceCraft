@@ -67,6 +67,13 @@ export const ATTRIBUTIONS: Attribution[] = [
     sourceUrl: "https://huggingface.co/stabilityai/stable-audio-3-small-music",
   },
   {
+    name: "Stable Audio 3 Medium — music",
+    role: "Larger music model for RTX 30 series and newer (gated download)",
+    license: "Stability AI Community License",
+    licenseUrl: "https://stability.ai/license",
+    sourceUrl: "https://huggingface.co/stabilityai/stable-audio-3-medium",
+  },
+  {
     name: "Stable Audio 3 Small — sound effects",
     role: "Lite sound-effect generation (gated download)",
     license: "Stability AI Community License",

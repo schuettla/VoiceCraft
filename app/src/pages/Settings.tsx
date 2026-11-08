@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "../lib/api";
-import type { AudioFormat, Engine, Preferences, Settings } from "../lib/types";
-import { formatBytes } from "../lib/format";
+import type { AudioFormat, Engine, KittenStyle, Preferences, Settings } from "../lib/types";
+import { formatBytes, formatDuration } from "../lib/format";
 import { setCachedPreferences } from "../lib/preferences";
 import { useToast } from "../components/Toaster";
 import { useConfirm } from "../components/Confirm";
@@ -20,6 +20,31 @@ import {
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { Slider } from "@/components/ui/slider";
+
+/** Idle times offered for unloading models; a value saved some other way is added to the list. */
+const IDLE_MINUTES = [0, 2, 5, 10, 30, 60, 120];
+
+function idleLabel(minutes: number): string {
+  if (minutes === 0) return "Never — keep loaded";
+  return minutes >= 60 && minutes % 60 === 0
+    ? `${minutes / 60} hour${minutes === 60 ? "" : "s"}`
+    : `${minutes} minutes`;
+}
+
+/** A slider with its value beside it, for the length defaults. */
+function ValueSlider({
+  value, min, max, step, text, onChange,
+}: {
+  value: number; min: number; max: number; step: number; text: string;
+  onChange: (next: number) => void;
+}) {
+  return (
+    <div className="flex w-64 items-center gap-3">
+      <Slider min={min} max={max} step={step} value={[value]} onValueChange={([next]) => onChange(next)} />
+      <span className="w-14 shrink-0 text-right text-[13px] tabular-nums text-muted-foreground">{text}</span>
+    </div>
+  );
+}
 
 const LANGUAGES = [
   ["en", "English"],
@@ -255,6 +280,90 @@ export function SettingsPage({ onRunSetup }: { onRunSetup: () => void }) {
                   {preferences.default_crossfade_ms} ms
                 </span>
               </div>
+            </SettingRow>
+          </div>
+        </Section>
+
+        <Separator />
+
+        <Section
+          title="Music, sound effects and voices"
+          description="Where the Generate forms start, and how long models stay in memory. Each form can still change them per job."
+        >
+          <div>
+            <SettingRow
+              label="Music length"
+              description="Clamped to what the chosen model makes on this machine."
+            >
+              <ValueSlider
+                min={10}
+                max={300}
+                step={5}
+                value={preferences.default_music_seconds}
+                text={formatDuration(preferences.default_music_seconds)}
+                onChange={(next) => void savePreference({ default_music_seconds: next })}
+              />
+            </SettingRow>
+            <SettingRow label="Music vocals" description="Models that can't sing stay instrumental.">
+              <OptionSelect
+                className="w-64"
+                value={preferences.default_music_vocals}
+                onChange={(value) =>
+                  void savePreference({ default_music_vocals: value as Preferences["default_music_vocals"] })
+                }
+                options={[
+                  { value: "instrumental", label: "Instrumental" },
+                  { value: "vocals", label: "With lyrics" },
+                ]}
+              />
+            </SettingRow>
+            <SettingRow label="Sound effect length">
+              <ValueSlider
+                min={1}
+                max={30}
+                step={0.5}
+                value={preferences.default_sfx_seconds}
+                text={`${preferences.default_sfx_seconds} s`}
+                onChange={(next) => void savePreference({ default_sfx_seconds: next })}
+              />
+            </SettingRow>
+            <SettingRow
+              label="Sound effect takes"
+              description="Variations made one after another. Each one takes as long as a single clip."
+            >
+              <OptionSelect
+                className="w-64"
+                value={String(preferences.default_sfx_takes)}
+                onChange={(value) => void savePreference({ default_sfx_takes: Number(value) })}
+                options={[1, 2, 3, 4].map((n) => ({ value: String(n), label: String(n) }))}
+              />
+            </SettingRow>
+            <SettingRow
+              label="KittenTTS 2 style"
+              description="Expressive is livelier but a little less steady."
+            >
+              <OptionSelect
+                className="w-64"
+                value={preferences.default_kitten_style}
+                onChange={(value) => void savePreference({ default_kitten_style: value as KittenStyle })}
+                options={[
+                  { value: "stable", label: "Stable" },
+                  { value: "expressive", label: "Expressive" },
+                ]}
+              />
+            </SettingRow>
+            <SettingRow
+              label="Unload models when idle"
+              description="Frees the GPU after this long without a job. The next job then reloads the model, which takes from seconds to about a minute."
+            >
+              <OptionSelect
+                className="w-64"
+                value={String(preferences.idle_unload_minutes)}
+                onChange={(value) => void savePreference({ idle_unload_minutes: Number(value) })}
+                options={[...new Set([...IDLE_MINUTES, preferences.idle_unload_minutes])]
+                  .sort((a, b) => a - b)
+                  .map((minutes) => ({ value: String(minutes), label: idleLabel(minutes) }))}
+              />
             </SettingRow>
           </div>
         </Section>

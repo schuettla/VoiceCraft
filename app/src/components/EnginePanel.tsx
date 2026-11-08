@@ -178,16 +178,6 @@ export function EnginePanel({
             {!engine.supported && engine.unsupported_reason && (
               <p className="mt-2 text-xs text-muted-foreground">{engine.unsupported_reason}</p>
             )}
-            {engine.supported && engine.warning && (
-              <Notice tone="warn" className="mt-2">
-                {engine.warning}
-              </Notice>
-            )}
-            {engine.supported && engine.max_duration_seconds && (
-              <p className="mt-2 text-xs text-muted-foreground">
-                Longest clip on this machine: {Math.round(engine.max_duration_seconds)} s.
-              </p>
-            )}
             {!desktop && (
               <p className="mt-2 text-xs text-muted-foreground">
                 Installing engines is only available in the desktop app.

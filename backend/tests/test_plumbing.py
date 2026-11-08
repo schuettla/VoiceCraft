@@ -13,6 +13,7 @@ import json
 import os
 import sys
 import tempfile
+import threading
 import time
 from dataclasses import replace
 from pathlib import Path
@@ -347,12 +348,12 @@ def test_kitten_options(client) -> None:
 
         plain = client.post("/api/generations", json={"profile_id": profile_id, "text": "Hello."}).json()
         done = _wait_for(client, plain["id"])
-        check("without options, params stays empty", done["status"] == "completed" and done["params"] is None, str(done))
+        check("without options, params holds only the model that made it", done["status"] == "completed" and done["params"] == {"model": "kitten-tts-2"}, str(done))
         check("kind and engine are recorded", done["kind"] == "speech" and done["engine"] == "kitten")
 
         styled = client.post("/api/generations", json={
             "profile_id": profile_id, "text": "Hello.", "preset": "expressive", "seed": 5}).json()
-        check("preset and seed are stored in params", styled["params"] == {"preset": "expressive", "seed": 5}, str(styled))
+        check("preset and seed are stored in params", styled["params"] == {"preset": "expressive", "seed": 5, "model": "kitten-tts-2"}, str(styled))
         done = _wait_for(client, styled["id"])
         check("the job completed", done["status"] == "completed", str(done))
         check("the engine received them", kitten.voices[-1].options == {"preset": "expressive", "seed": 5}
@@ -360,7 +361,7 @@ def test_kitten_options(client) -> None:
 
         seed_zero = client.post("/api/generations", json={
             "profile_id": profile_id, "text": "Hello.", "seed": 0}).json()
-        check("a seed of 0 is kept", seed_zero["params"] == {"seed": 0}, str(seed_zero))
+        check("a seed of 0 is kept", seed_zero["params"] == {"seed": 0, "model": "kitten-tts-2"}, str(seed_zero))
         _wait_for(client, seed_zero["id"])
 
         check("an unknown style is rejected by the API",
@@ -373,7 +374,7 @@ def test_kitten_options(client) -> None:
         draft = client.post("/api/profiles", data={"name": "Draft", "engine": "kokoro", "preset_voice": "af_heart"}).json()
         other = client.post("/api/generations", json={
             "profile_id": draft["id"], "text": "Hello.", "preset": "expressive", "seed": 9}).json()
-        check("engines without these knobs don't record them", other["params"] is None, str(other))
+        check("engines without these knobs don't record them", other["params"] == {"model": "kokoro-82m"}, str(other))
         _wait_for(client, other["id"])
         check("and don't receive them", kokoro.voices[-1].options == {})
     finally:
@@ -435,6 +436,22 @@ def test_scheduling() -> None:
         check("the loaded engine was released", not keep.is_loaded())
         check("nothing loaded -> nothing to do", generation_service._idle_check() is False)
 
+        # The Settings preference decides when the environment variable isn't set.
+        generation_service.IDLE_UNLOAD_SECONDS = None
+        config.save_settings({"preferences": {}})
+        check("no preference: the default is ten minutes", generation_service.idle_seconds() == 600)
+        config.save_settings({"preferences": {"idle_unload_minutes": 3}})
+        check("the preference is read each time", generation_service.idle_seconds() == 180)
+        config.save_settings({"preferences": {"idle_unload_minutes": 0}})
+        check("0 minutes keeps models loaded", generation_service.idle_seconds() == 0
+              and generation_service._idle_check() is False)
+        config.save_settings({"preferences": {"idle_unload_minutes": "soon"}})
+        check("a damaged value falls back to the default", generation_service.idle_seconds() == 600)
+        generation_service.IDLE_UNLOAD_SECONDS = 5
+        config.save_settings({"preferences": {"idle_unload_minutes": 3}})
+        check("the environment variable wins over the preference", generation_service.idle_seconds() == 5)
+        config.save_settings({"preferences": {}})
+
         # the real queue keeps the pending count honest
         generation_service.IDLE_UNLOAD_SECONDS = 0
         done: list[int] = []
@@ -452,6 +469,42 @@ def test_scheduling() -> None:
         while time.monotonic() < deadline and generation_service._pending:
             time.sleep(0.02)
         check("a failing job still decrements the count", generation_service._pending == 0)
+
+        # With idle unload off, the watcher looks rarely instead of twice a second.
+        generation_service.IDLE_UNLOAD_SECONDS = 0
+        check("idle unload off -> the watcher waits 30 s", generation_service._watch_interval() == 30.0)
+        generation_service.IDLE_UNLOAD_SECONDS = 1
+        check("idle unload on -> the watcher checks often", generation_service._watch_interval() == 0.5)
+        generation_service.IDLE_UNLOAD_SECONDS = 0
+
+        # Picking or deleting a model from a request must not unload the engine
+        # under a running job: the unload waits for the worker.
+        busy = FakeEngine("busy", True)
+        _REGISTRY["busy"] = busy
+        gate = threading.Event()
+        seen: dict[str, bool] = {}
+
+        def running_job() -> None:
+            gate.wait(3)
+            seen["loaded_during_job"] = busy.is_loaded()
+
+        generation_service.submit(running_job)
+        model_service._unload_engine("busy")
+        check("a request's unload doesn't hit the running job", busy.is_loaded() and busy.unloads == 0)
+        gate.set()
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline and generation_service._pending:
+            time.sleep(0.02)
+        check("…the job finished with its engine loaded", seen.get("loaded_during_job") is True)
+        check("…and the unload ran after it", not busy.is_loaded() and busy.unloads == 1)
+
+        busy._loaded = True
+        generation_service.submit(model_service._unload_engine, "busy")
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline and generation_service._pending:
+            time.sleep(0.02)
+        check("on the worker itself the unload is immediate", not busy.is_loaded() and busy.unloads == 2)
+        check("…and doesn't queue a second job", generation_service._pending == 0)
     finally:
         _REGISTRY.clear()
         _REGISTRY.update(saved)

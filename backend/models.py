@@ -95,6 +95,9 @@ class GenerateRequest(BaseModel):
     # have no such knobs and ignore them.
     preset: Literal["stable", "expressive"] | None = None
     seed: int | None = Field(default=None, ge=0, le=2**31 - 1)
+    # A catalog entry of the profile's engine (Qwen 0.6B / 1.7B, Kitten packed /
+    # small). Omitted: the one the engine has active.
+    model_id: str | None = Field(default=None, max_length=64)
 
 
 AudioKind = Literal["music", "sfx"]
@@ -109,6 +112,44 @@ MUSIC_STYLE_MAX_CHARS = 512
 MUSIC_LYRICS_MAX_CHARS = 4096
 
 
+AudioEditMode = Literal["variation", "extend", "replace"]
+# The longest source an edit accepts is the engine's own limit; these bound the
+# knobs that have a meaning of their own.
+EDIT_MIN_STRENGTH = 0.05
+
+
+class AudioEdit(BaseModel):
+    """Start from an existing clip instead of from silence (Phase 10).
+
+    - `variation`: a new take that stays close to the source. `strength` is how
+      far it may move: 1 ignores the source, small values keep it nearly intact.
+    - `extend`: keep the whole source and continue it. `duration_seconds` of the
+      request is the length of the result, so it must be longer than the source.
+    - `replace`: regenerate the part between `start_seconds` and `end_seconds`
+      and keep the rest.
+    """
+
+    mode: AudioEditMode
+    generation_id: str | None = None
+    asset_id: str | None = None
+    strength: float = Field(default=0.5, ge=EDIT_MIN_STRENGTH, le=1.0)
+    start_seconds: float | None = Field(default=None, ge=0)
+    end_seconds: float | None = Field(default=None, gt=0)
+
+    @model_validator(mode="after")
+    def _check(self) -> "AudioEdit":
+        if bool(self.generation_id) == bool(self.asset_id):
+            raise ValueError("name the clip to start from: provide exactly one of generation_id or asset_id")
+        if self.mode == "replace":
+            if self.start_seconds is None or self.end_seconds is None:
+                raise ValueError("say which part to replace: start_seconds and end_seconds")
+            if self.end_seconds <= self.start_seconds:
+                raise ValueError("the end of the part to replace must come after its start")
+        elif self.start_seconds is not None or self.end_seconds is not None:
+            raise ValueError("start_seconds and end_seconds only apply to replacing a part")
+        return self
+
+
 class AudioGenerateRequest(BaseModel):
     """`POST /api/generations/audio` — a music or sound-effect job (§5.3)."""
 
@@ -116,6 +157,10 @@ class AudioGenerateRequest(BaseModel):
     # Defaults to the kind's default engine; must be installed.
     engine: str | None = Field(default=None, max_length=32, pattern=r"^[a-z0-9_]+$")
     prompt: str = Field(min_length=1, max_length=4000)
+    # A catalog entry (acestep-1.5-sft, sa3-medium-music…). It names its engine,
+    # so `engine` may be left out; given both, they must agree. Omitted: the
+    # engine's active model.
+    model_id: str | None = Field(default=None, max_length=64)
     duration_seconds: float = Field(gt=0, le=MUSIC_MAX_SECONDS)
     lyrics: str | None = Field(default=None, max_length=8000)   # music only
     seed: int | None = Field(default=None, ge=0, le=2**31 - 1)
@@ -123,6 +168,9 @@ class AudioGenerateRequest(BaseModel):
     guidance: float | None = Field(default=None, ge=0, le=50)
     takes: int = Field(default=1, ge=1, le=4)                    # sfx only
     output_format: AudioFormat = "wav"
+    # Start from a clip (variation / extend / replace a part); needs an engine
+    # that can edit. `duration_seconds` is then the result's length.
+    edit: AudioEdit | None = None
 
     @field_validator("prompt")
     @classmethod
@@ -147,8 +195,9 @@ class AudioGenerateRequest(BaseModel):
         else:
             if self.takes > 1:
                 raise ValueError("several takes are only available for sound effects")
-            # The engine's documented ranges (acestep/inference.py).
-            if self.duration_seconds < MUSIC_MIN_SECONDS:
+            # The engine's documented ranges (acestep/inference.py). An edit
+            # takes its length from the clip, so the minimum is not its business.
+            if self.edit is None and self.duration_seconds < MUSIC_MIN_SECONDS:
                 raise ValueError(f"a song must be at least {MUSIC_MIN_SECONDS:.0f} seconds")
             if len(self.prompt) > MUSIC_STYLE_MAX_CHARS:
                 raise ValueError(
@@ -158,6 +207,34 @@ class AudioGenerateRequest(BaseModel):
             if self.lyrics and len(self.lyrics) > MUSIC_LYRICS_MAX_CHARS:
                 raise ValueError(f"lyrics can be at most {MUSIC_LYRICS_MAX_CHARS} characters")
         return self
+
+
+class AudioModelOut(BaseModel):
+    """One checkpoint of an engine, with what a job on *it* gets on this machine.
+
+    The engine's own fields describe its active model; these describe each model,
+    because limits and defaults differ (Stable Audio 3 Medium makes longer clips
+    than Small; ACE-Step base wants 50 steps, turbo 8).
+    """
+
+    id: str
+    title: str
+    variant: str | None = None
+    summary: str = ""
+    default: bool = False               # the engine's default entry
+    active: bool = False                # what the engine loads when nothing is named
+    downloaded: bool = False
+    unavailable_reason: str | None = None   # this machine can't run it (needs a newer GPU)
+    max_duration_seconds: float | None = None
+    default_steps: int | None = None
+    default_guidance: float | None = None
+    download_estimate_bytes: int | None = None
+    license_tier: Literal["open", "conditional", "noncommercial"] = "open"
+    license_name: str | None = None
+    license_url: str | None = None
+    gated: bool = False
+    # installed + weights + this machine can run it: a job naming it is accepted now.
+    ready: bool = False
 
 
 class AudioEngineOut(BaseModel):
@@ -188,8 +265,12 @@ class AudioEngineOut(BaseModel):
     gated: bool = False
     # Whether the engine can sing lyrics (music engines only; false for sfx).
     lyrics: bool = True
+    # Whether it can start from an existing clip (variation / extend / replace).
+    editing: bool = False
     # installed + weights + supported: a generation would be accepted right now.
     ready: bool = False
+    # Every checkpoint of the engine, the active one included, default first.
+    models: list[AudioModelOut] = Field(default_factory=list)
 
 
 class GenerationOut(BaseModel):
@@ -212,6 +293,7 @@ class GenerationOut(BaseModel):
     warning: str | None
     created_at: dt.datetime
     completed_at: dt.datetime | None
+    favorite: bool = False
 
     @field_validator("params", mode="before")
     @classmethod
@@ -225,6 +307,12 @@ class GenerationOut(BaseModel):
                 return None
             return parsed if isinstance(parsed, dict) else None
         return value
+
+
+class GenerationUpdate(BaseModel):
+    """What a Library user may change on a finished generation."""
+
+    favorite: bool
 
 
 # --------------------------------------------------------------------------
@@ -598,6 +686,9 @@ class ModelOut(BaseModel):
     license_name: str | None = None
     license_url: str | None = None
     gated: bool = False                 # download needs a Hugging Face token
+    # Set when this machine can't run the entry (it needs a newer GPU); the page
+    # explains it and offers neither Download nor Use.
+    unavailable_reason: str | None = None
 
 
 class ModelCategoryOut(BaseModel):
@@ -672,6 +763,17 @@ class Preferences(BaseModel):
     default_language: str = Field(default="en", max_length=16)
     default_output_format: AudioFormat = "mp3"
     default_crossfade_ms: int = Field(default=0, ge=0, le=config.MAX_CROSSFADE_MS)
+    # Where the Generate forms start (Phase 11). Each is only a starting value:
+    # the form can change it per job, and the engine's own limit still applies
+    # (a default of 5 minutes is clamped to what the chosen model makes here).
+    default_music_seconds: int = Field(default=30, ge=MUSIC_MIN_SECONDS, le=MUSIC_MAX_SECONDS)
+    default_music_vocals: Literal["instrumental", "vocals"] = "instrumental"
+    default_sfx_seconds: float = Field(default=3.0, ge=1.0, le=SFX_MAX_SECONDS)
+    default_sfx_takes: int = Field(default=1, ge=1, le=4)
+    default_kitten_style: Literal["stable", "expressive"] = "stable"
+    # Minutes without a job before loaded models are unloaded to free the GPU;
+    # 0 keeps them loaded. `VOICECRAFT_IDLE_UNLOAD_SECONDS`, when set, wins.
+    idle_unload_minutes: int = Field(default=10, ge=0, le=240)
 
 
 class DirectoryInfo(BaseModel):

@@ -1,12 +1,15 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { api } from "../lib/api";
 import type { AudioEngine, AudioFormat, Generation } from "../lib/types";
-import { AUDIO_FORMATS, formatMinutes } from "../lib/format";
-import { chooseEngine, ignoresGuidance, readyEngines } from "../lib/engines";
+import { AUDIO_FORMATS } from "../lib/format";
+import { chooseEngine, ignoresGuidance, modelViews, type ModelView } from "../lib/engines";
+import { usePreferences } from "../lib/preferences";
 import { useRemembered } from "../lib/remember";
+import { ClipEditPanel, EDIT_BUTTON, useClipEdit, type ClipSource } from "./ClipEdit";
+import { AudioModelPicker } from "./AudioModelPicker";
 import { EngineGate } from "./EngineGate";
 import { useToast } from "./Toaster";
-import { Field, Notice, OptionSelect } from "./common";
+import { Field, OptionSelect } from "./common";
 import { SpinnerIcon } from "./icons";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -15,21 +18,11 @@ import { Textarea } from "@/components/ui/textarea";
 
 const EXAMPLES = ["rain on a window", "crowd murmur", "whoosh", "keyboard typing"];
 
-const DEFAULT_SECONDS = 3;
 const ENGINE_MAX_SECONDS = 30;
 const MAX_TAKES = 4;
 const MAX_SEED = 2 ** 31 - 1;
 
-/**
- * Time on the one GPU this was measured on (GTX 1060 6 GB, Phase 0): 5.85 s per
- * step, plus about a minute to load the model and decode. It is shown only when
- * the engine reports that the card needs offloading, because on any other card
- * it would be a guess dressed as a measurement.
- */
-const SECONDS_PER_STEP_OFFLOADED = 5.85;
-const LOAD_SECONDS = 60;
 const FALLBACK_STEPS = 20;
-const MEASURED_ENGINE = "moss_sfx";
 
 /**
  * The Sound FX mode of the Generate page. Until the engine is installed,
@@ -43,6 +36,8 @@ export function SoundFxForm({
   onFormat,
   onQueued,
   onOpenModels,
+  source = null,
+  onClearSource,
 }: {
   /** Every sound-effect engine the backend knows, default first (null while loading). */
   engines: AudioEngine[] | null;
@@ -51,12 +46,26 @@ export function SoundFxForm({
   onFormat: (next: AudioFormat) => void;
   onQueued: (rows: Generation[]) => void;
   onOpenModels: () => void;
+  /** A finished clip to start from (variation / extend / replace a part). */
+  source?: ClipSource | null;
+  onClearSource: () => void;
 }) {
-  // The last engine the user picked; used only while it is still ready.
-  const [remembered, setRemembered] = useRemembered<string>("voicecraft.generate.engine.sfx", "");
-  const { engine, passedOver } = chooseEngine(engines ?? [], remembered);
-  const choices = readyEngines(engines ?? []);
+  // The last model the user picked; used only while it is still ready.
+  const [remembered, setRemembered] = useRemembered<string>("voicecraft.generate.model.sfx", "");
+  // What was picked in the list this visit, even if it still needs a download.
+  const [picked, setPicked] = useState("");
+  const views = useMemo(() => modelViews(engines ?? []), [engines]);
+  // Starting from a clip is something only some engines can do, so only they are offered.
+  const editors = views.filter((item) => item.editing);
+  const pool = source && editors.length ? editors : views;
+  const { engine, passedOver } = chooseEngine(pool, remembered, picked);
+  const pick = (id: string) => {
+    setPicked(id);
+    setRemembered(id);
+  };
   return (
+    <div className="space-y-5">
+    <AudioModelPicker models={pool} chosen={engine} onPick={pick} onOpenModels={onOpenModels} />
     <EngineGate
       engine={engine}
       passedOver={passedOver}
@@ -64,76 +73,84 @@ export function SoundFxForm({
       subject="Sound effects"
       noun="sound-effect"
       plural
+      lead={source && engine ? `Starting from a clip needs ${engine.label}.` : null}
       onOpenModels={onOpenModels}
     >
       {(ready) => (
         <Form
           engine={ready}
-          choices={choices}
-          onEngine={setRemembered}
           format={format}
           onFormat={onFormat}
           onQueued={onQueued}
+          source={source}
+          onClearSource={onClearSource}
         />
       )}
     </EngineGate>
+    </div>
   );
 }
 
 function Form({
   engine,
-  choices,
-  onEngine,
   format,
   onFormat,
   onQueued,
+  source,
+  onClearSource,
 }: {
-  engine: AudioEngine;
-  /** Engines that would run right now; a selector shows when there are two or more. */
-  choices: AudioEngine[];
-  onEngine: (name: string) => void;
+  engine: ModelView;
   format: AudioFormat;
   onFormat: (next: AudioFormat) => void;
   onQueued: (rows: Generation[]) => void;
+  source: ClipSource | null;
+  onClearSource: () => void;
 }) {
   const toast = useToast();
   const limit = Math.min(ENGINE_MAX_SECONDS, engine.max_duration_seconds ?? ENGINE_MAX_SECONDS);
   const defaultSteps = engine.default_steps ?? FALLBACK_STEPS;
   const [prompt, setPrompt] = useState("");
-  const [wantedSeconds, setSeconds] = useState(DEFAULT_SECONDS);
-  const [takes, setTakes] = useState(1);
+  // Untouched, these follow the Settings defaults (which may still be loading).
+  const preferences = usePreferences();
+  const [wantedSeconds, setSeconds] = useState<number | null>(null);
+  const [chosenTakes, setTakes] = useState<number | null>(null);
+  const takes = chosenTakes ?? preferences.default_sfx_takes;
   const [seed, setSeed] = useState("");
   const [steps, setSteps] = useState("");
   const [guidance, setGuidance] = useState("");
   const [busy, setBusy] = useState(false);
 
-  // What was asked for is kept when the engine changes; what is used follows it.
-  const seconds = Math.min(wantedSeconds, limit);
-  const guidanceIgnored = ignoresGuidance(engine);
+  // Starting from a clip: its own description is the best first guess for the new one.
+  const edit = useClipEdit(source, limit);
+  const editing = source ? edit.built : null;
+  const sourceId = source?.id;
+  const sourceText = source?.text;
+  useEffect(() => {
+    if (sourceText) setPrompt(sourceText.slice(0, 4000));
+  }, [sourceId, sourceText]);
 
-  // Measured for MOSS on the one offloaded card only. Another engine with a
-  // warning (Stable Audio 3 on a CPU) would get the wrong number.
-  const estimate = useMemo(() => {
-    if (engine.name !== MEASURED_ENGINE || !engine.warning) return null;
-    const perClip = (Number(steps) || defaultSteps) * SECONDS_PER_STEP_OFFLOADED;
-    return perClip * takes + LOAD_SECONDS;
-  }, [engine.name, engine.warning, steps, takes, defaultSteps]);
+  // What was asked for is kept when the engine changes; what is used follows it.
+  const seconds = Math.max(1, Math.min(wantedSeconds ?? preferences.default_sfx_seconds, limit));
+  const guidanceIgnored = ignoresGuidance(engine);
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
-    if (!prompt.trim()) return;
+    if (!prompt.trim() || editing?.problem) return;
     setBusy(true);
     try {
       const rows = await api.generateAudio({
         kind: "sfx",
         engine: engine.name,
+        ...(engine.model_id ? { model_id: engine.model_id } : {}),
         prompt,
-        duration_seconds: seconds,
+        duration_seconds: editing ? editing.duration : seconds,
+        ...(editing ? { edit: editing.edit } : {}),
         takes,
         output_format: format,
         ...(seed ? { seed: Math.min(Number(seed), MAX_SEED) } : {}),
         ...(steps ? { steps: Math.min(Math.max(Number(steps), 1), 200) } : {}),
-        ...(guidance ? { guidance: Math.min(Number(guidance), 50) } : {}),
+        // A value typed for another model stays in the (disabled) box; don't send it.
+        ...(guidance && !guidanceIgnored ? { guidance: Math.min(Number(guidance), 50) } : {}),
       });
       onQueued(rows);
       toast(rows.length > 1 ? `${rows.length} takes queued` : "Generation queued", "success");
@@ -146,16 +163,8 @@ function Form({
 
   return (
     <form onSubmit={submit} className="space-y-5">
-      {engine.warning && <Notice tone="warn">{engine.warning}</Notice>}
-
-      {choices.length > 1 && (
-        <Field label="Engine">
-          <OptionSelect
-            value={engine.name}
-            onChange={onEngine}
-            options={choices.map((choice) => ({ value: choice.name, label: choice.label }))}
-          />
-        </Field>
+      {source && (
+        <ClipEditPanel source={source} edit={edit} limit={limit} onClear={onClearSource} />
       )}
 
       <Field label="Describe it">
@@ -183,24 +192,19 @@ function Form({
         </div>
       </Field>
 
-      <div className="grid gap-4 sm:grid-cols-[minmax(0,1fr)_7rem_7rem]">
-        <Field
-          label={`Length — ${seconds % 1 === 0 ? seconds : seconds.toFixed(1)} s`}
-          hint={
-            engine.name === MEASURED_ENGINE && engine.warning
-              ? "Rendering takes the same time whatever the length, so ask for the length you need."
-              : undefined
-          }
-        >
-          <Slider
-            min={1}
-            max={limit}
-            step={0.5}
-            value={[seconds]}
-            onValueChange={([next]) => setSeconds(next)}
-            className="py-2"
-          />
-        </Field>
+      <div className={source ? "grid gap-4 sm:grid-cols-[7rem]" : "grid gap-4 sm:grid-cols-[minmax(0,1fr)_7rem]"}>
+        {!source && (
+          <Field label={`Length — ${seconds % 1 === 0 ? seconds : seconds.toFixed(1)} s`}>
+            <Slider
+              min={1}
+              max={limit}
+              step={0.5}
+              value={[seconds]}
+              onValueChange={([next]) => setSeconds(next)}
+              className="py-2"
+            />
+          </Field>
+        )}
         <Field label="Takes" hint="Variations, one after another.">
           <OptionSelect
             value={String(takes)}
@@ -209,13 +213,6 @@ function Form({
               value: String(i + 1),
               label: String(i + 1),
             }))}
-          />
-        </Field>
-        <Field label="Format">
-          <OptionSelect
-            value={format}
-            onChange={(value) => onFormat(value as AudioFormat)}
-            options={AUDIO_FORMATS.map((value) => ({ value, label: value.toUpperCase() }))}
           />
         </Field>
       </div>
@@ -256,19 +253,25 @@ function Form({
         </div>
       </details>
 
-      <div className="flex items-center gap-4">
-        <p className="text-xs text-muted-foreground">
-          {estimate
-            ? `Roughly ${formatMinutes(estimate)} on a 6 GB GPU, measured on a GTX 1060.`
-            : ""}
-        </p>
-        <Button
-          type="submit"
-          className="ml-auto"
-          disabled={busy || !prompt.trim()}
-        >
+      <div className="flex items-end justify-end gap-3">
+        <Field label="Format" className="w-28">
+          <OptionSelect
+            value={format}
+            onChange={(value) => onFormat(value as AudioFormat)}
+            options={AUDIO_FORMATS.map((value) => ({ value, label: value.toUpperCase() }))}
+          />
+        </Field>
+        <Button type="submit" disabled={busy || !prompt.trim() || !!editing?.problem}>
           {busy && <SpinnerIcon />}
-          {busy ? "Queueing…" : takes > 1 ? `Generate ${takes} takes` : "Generate"}
+          {busy
+            ? "Queueing…"
+            : source
+              ? takes > 1
+                ? `${EDIT_BUTTON[edit.state.mode]} ×${takes}`
+                : EDIT_BUTTON[edit.state.mode]
+              : takes > 1
+                ? `Generate ${takes} takes`
+                : "Generate"}
         </Button>
       </div>
     </form>

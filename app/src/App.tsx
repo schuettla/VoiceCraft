@@ -12,7 +12,7 @@ import { Separator } from "@/components/ui/separator";
 import { SidebarInset, SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ProfilesPage } from "./pages/Profiles";
-import { GeneratePage } from "./pages/Generate";
+import { GeneratePage, type GenerateHandoff } from "./pages/Generate";
 import { LibraryPage } from "./pages/Library";
 import { EditPage } from "./pages/Edit";
 import { ModelsPage } from "./pages/Models";
@@ -26,6 +26,13 @@ export default function App() {
   const [view, setView] = useState<View>("profiles");
   const [health, setHealth] = useState<Health | null>(null);
   const [reachable, setReachable] = useState<boolean | null>(null);
+  // Set by the Library ("edit this clip", "use this script"); Generate takes it.
+  const [handoff, setHandoff] = useState<GenerateHandoff | null>(null);
+  const clearHandoff = useCallback(() => setHandoff(null), []);
+  const openInGenerate = useCallback((next: GenerateHandoff) => {
+    setHandoff(next);
+    setView("generate");
+  }, []);
 
   /** Boot: wait for the backend; fall back to onboarding if it can't start. */
   const boot = useCallback(async () => {
@@ -141,9 +148,14 @@ export default function App() {
                   <div className="mx-auto w-full max-w-4xl px-8 py-8">
                     {view === "profiles" && <ProfilesPage health={health} />}
                     {view === "generate" && (
-                      <GeneratePage health={health} onOpenModels={() => setView("models")} />
+                      <GeneratePage
+                        health={health}
+                        onOpenModels={() => setView("models")}
+                        handoff={handoff}
+                        onHandoffUsed={clearHandoff}
+                      />
                     )}
-                    {view === "library" && <LibraryPage />}
+                    {view === "library" && <LibraryPage onOpenInGenerate={openInGenerate} />}
                     {view === "models" && <ModelsPage />}
                     {view === "settings" && (
                       <SettingsPage onRunSetup={() => setPhase("setup")} />

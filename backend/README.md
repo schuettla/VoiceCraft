@@ -111,17 +111,28 @@ Stable Audio 3 is **gated** and under Stability's Community License.
 
 | Endpoint | What it does |
 |---|---|
-| `GET /api/audio-engines` | per engine: `installed`, `supported` (+ `unsupported_reason`), `warning`, `max_duration_seconds`, the catalog entry and whether its weights are on disk, license tier, `gated`, `lyrics` (can it sing), `default`, `ready` |
+| `GET /api/audio-engines` | per engine: `installed`, `supported` (+ `unsupported_reason`), `warning`, `max_duration_seconds`, the catalog entry and whether its weights are on disk, license tier, `gated`, `lyrics` (can it sing), `editing` (can it start from a clip), `default`, `ready`, and `models[]` (every checkpoint of the engine with its own `downloaded`, `unavailable_reason`, `ready`, length limit and default steps) |
 | `GET` / `PUT` / `DELETE /api/models/hf-token` | the Hugging Face token for gated downloads. Write-only: `GET` and `PUT` answer `{configured, source}` (`app` or `huggingface`), never the token |
-| `POST /api/generations/audio` | `{kind, engine?, prompt, duration_seconds, lyrics?, seed?, steps?, guidance?, takes?, output_format}` → **202 with a list** of `queued` rows (`takes` of them for SFX, one for music) |
+| `POST /api/generations/audio` | `{kind, engine?, model_id?, prompt, duration_seconds, lyrics?, seed?, steps?, guidance?, takes?, output_format, edit?}` → **202 with a list** of `queued` rows (`takes` of them for SFX, one for music). `model_id` is a catalog entry (it names its engine; the worker makes it the engine's active model before the job); `edit` starts from an existing clip, see below |
 | `GET /api/generations?kind=speech\|music\|sfx` | the history, narrowed to one type |
+| `PATCH /api/generations/{id}` | `{favorite: bool}` → the updated row. Stars a generation in the Library |
 
 A request is refused up front, in this order: unknown engine or wrong kind (400),
 not installed, weights not downloaded, hardware can't run it (all 409, each says
-what to do), clip longer than this machine allows (400). Limits come from the
-Phase 0 run on a 6 GB GTX 1060: ACE-Step is capped at 30 s on a card with under
-8 GB or without bf16 (a 2 minute clip did not finish), MOSS is offered from about
-6 GB and warns that it takes minutes per clip.
+what to do), clip longer than this machine allows (400). ACE-Step is capped at 30 s on a
+card with under 8 GB or without bf16, and MOSS is offered from about 6 GB.
+
+**Starting from a clip.** `edit` is `{mode, generation_id | asset_id, strength?,
+start_seconds?, end_seconds?}`. `mode` is `variation` (a new take close to the clip;
+`strength` 0.05–1 is how far it may move), `extend` (keep the clip and continue it;
+`duration_seconds` is the *result's* length and must be at least a second longer than
+the clip) or `replace` (regenerate `start_seconds`–`end_seconds` and keep the rest). For
+`variation` and `replace` the result has the clip's own length, whatever
+`duration_seconds` says, and a music clip may then be shorter than the usual 10 s. Only
+engines with `editing: true` take it (the two Stable Audio 3 engines); without an
+`engine` the request goes to one of those, and a named engine that can't gets a 400 that
+names one that can. The source is any finished generation or an Editor asset, in any
+format ffmpeg reads.
 
 Rows have `profile_id: null`; `text` is the prompt and `params` holds
 `duration_seconds`, `lyrics`, `seed`, `steps`, `guidance` and, for several takes,
@@ -144,12 +155,11 @@ to the local folder. Downloads of a gated entry carry the token from
 `services/hf_token.py` (stored in `<data dir>/secrets/hf_token`, never logged or
 returned) and turn the Hub's 401/403 into steps a person can follow.
 
-**Status:** ACE-Step and MOSS make real calls (Phases 6 and 7) but were run only
-as far as the Phase 0 spike on a GTX 1060. **Stable Audio 3 has never run on any
-machine**: the weights are gated and the build machine has no Hugging Face access.
-Its adapter is tested against a fake package with the call shapes read from the
-library's source (`tests/test_sa3.py`); what the real model sounds like, how fast it
-is, and whether its text encoder loads the way the config says are all unverified.
+**Status:** MOSS and Stable Audio 3 Small (music, and its variation / extend /
+replace modes) have been run for real through the app. ACE-Step was run as far as the
+Phase 0 spike. The Stable Audio 3 adapter is also tested against a fake package with
+the call shapes read from the library's source (`tests/test_sa3.py`). Not yet run for
+real: Stable Audio 3 sound effects, ACE-Step through the app, and vocals on any engine.
 
 ## Cloning a voice
 
@@ -184,7 +194,9 @@ clip is analysed on every generation instead, which is slower, not wrong.
 `GET /api/profiles/voices?engine=kitten` lists the presets (read from the
 downloaded model, else the bundled list). `POST /api/generations` accepts
 `preset` (`stable`|`expressive`) and `seed` for Kitten profiles; they are kept
-in the generation's `params`.
+in the generation's `params`. It also takes `model_id`, a checkpoint of the voice's
+engine (Qwen 0.6B / 1.7B, Kitten packed / small); omitted, the engine's active
+model is used. Either way `params.model` records which one made the clip.
 
 ## Models and GPU use
 
@@ -228,4 +240,4 @@ alone (FR10).
 | `VOICECRAFT_QWEN_MODEL` | `Qwen/Qwen3-TTS-12Hz-0.6B-Base` (1.7B-Base if you have the VRAM) |
 | `VOICECRAFT_KOKORO_MODEL` | `hexgrad/Kokoro-82M` |
 | `VOICECRAFT_AUTO_PREPARE` | `1` — set `0` to skip voice-print extraction (the test suite does) |
-| `VOICECRAFT_IDLE_UNLOAD_SECONDS` | `600` — unload loaded models after this long without a job; `0` disables |
+| `VOICECRAFT_IDLE_UNLOAD_SECONDS` | unload loaded models after this long without a job; `0` disables. Unset: the `idle_unload_minutes` preference (default 10 minutes) decides |

@@ -56,6 +56,8 @@ export interface Generation {
   warning: string | null;
   created_at: string;
   completed_at: string | null;
+  /** Starred in the Library. */
+  favorite: boolean;
 }
 
 export interface Asset {
@@ -85,6 +87,46 @@ export interface EngineStatus {
 
 /** The two on-demand audio kinds (speech has profiles and its own endpoints). */
 export type AudioKind = "music" | "sfx";
+
+/** The ways to start from an existing clip. */
+export type AudioEditMode = "variation" | "extend" | "replace";
+
+/** `edit` of a generate-audio request: which clip, and what to do with it. */
+export interface AudioEditRequest {
+  mode: AudioEditMode;
+  generation_id: string;
+  /** Variation: 0.05–1, how far the result may move from the clip. */
+  strength?: number;
+  /** Replace: the part to regenerate, in seconds from the clip's start. */
+  start_seconds?: number;
+  end_seconds?: number;
+}
+
+/** One checkpoint of a music / SFX engine, with the limits a job on *it* gets here. */
+export interface AudioModelInfo {
+  id: string;
+  title: string;
+  /** Tells entries that share one repository apart ("packed", "emb4"). */
+  variant: string | null;
+  summary: string;
+  /** The engine's default entry. */
+  default: boolean;
+  /** What the engine loads when a request names no model. */
+  active: boolean;
+  downloaded: boolean;
+  /** This machine can't run it (it needs a newer GPU). */
+  unavailable_reason: string | null;
+  max_duration_seconds: number | null;
+  default_steps: number | null;
+  default_guidance: number | null;
+  download_estimate_bytes: number | null;
+  license_tier: LicenseTier;
+  license_name: string | null;
+  license_url: string | null;
+  gated: boolean;
+  /** Installed + weights + runnable here: a job naming it is accepted now. */
+  ready: boolean;
+}
 
 /** One music / SFX engine and what this machine can do with it. */
 export interface AudioEngine {
@@ -117,8 +159,12 @@ export interface AudioEngine {
   gated: boolean;
   /** Whether it can sing lyrics (music engines). */
   lyrics: boolean;
+  /** Whether it can start from an existing clip (variation, extend, replace a part). */
+  editing: boolean;
   /** Installed + weights + supported: a generation would be accepted now. */
   ready: boolean;
+  /** Every checkpoint of the engine, the default first. */
+  models: AudioModelInfo[];
 }
 
 /** Whether a Hugging Face token is available for gated downloads — never the token. */
@@ -156,6 +202,8 @@ export interface Model {
   languages: string[];
   clones_voices: boolean;
   needs_gpu: boolean;
+  /** Why this machine can't run it (it needs a newer GPU); null when it can. */
+  unavailable_reason: string | null;
   downloaded: boolean;
   /** Measured on disk; null until the model is downloaded. */
   size_bytes: number | null;
@@ -194,6 +242,14 @@ export interface Preferences {
   default_language: string;
   default_output_format: AudioFormat;
   default_crossfade_ms: number;
+  /** Where the Generate forms start; each form can change it per job. */
+  default_music_seconds: number;
+  default_music_vocals: "instrumental" | "vocals";
+  default_sfx_seconds: number;
+  default_sfx_takes: number;
+  default_kitten_style: KittenStyle;
+  /** Minutes idle before loaded models are unloaded; 0 keeps them loaded. */
+  idle_unload_minutes: number;
 }
 
 export interface DirectoryInfo {

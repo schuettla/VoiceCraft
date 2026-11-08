@@ -17,6 +17,9 @@ is always measured, never taken from here.
 from __future__ import annotations
 
 import os
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 
 import config
@@ -86,6 +89,16 @@ class ModelSpec:
     # size, used for the estimate and the free-space check only.
     companion: str = ""
     companion_bytes: int = 0
+    # Hardware an entry needs, so a bigger model is offered to the machines that
+    # can run it and explained, not hidden, on the ones that can't.
+    # `min_capability` is the CUDA compute capability's major number (8 = Ampere,
+    # the RTX 30 series); 0 means "no requirement". `requirement` is the sentence
+    # shown when this machine falls short.
+    min_capability: int = 0
+    requirement: str = ""
+    # The longest clip this checkpoint makes, when it differs from its engine's
+    # usual limit (0 = the engine's own).
+    max_seconds: float = 0.0
 
     @property
     def download_estimate_bytes(self) -> int:
@@ -149,9 +162,7 @@ ACESTEP_SHARED = tuple(
 )
 ACESTEP_NOTES = (
     "MIT licensed. Vocals or instrumental, 48 kHz stereo.",
-    "Needs an NVIDIA GPU. On a 6 GB GTX 1060 a 30 s instrumental took about a "
-    "minute; a 2 minute clip did not finish, so clips there are capped at 30 s.",
-    "More VRAM allows longer songs (not tested yet).",
+    "Needs an NVIDIA GPU.",
 )
 
 
@@ -162,6 +173,7 @@ ACESTEP_NOTES = (
 # real figure is whatever the Models page measures after a download.
 SA3_REPO_MUSIC = "stabilityai/stable-audio-3-small-music"
 SA3_REPO_SFX = "stabilityai/stable-audio-3-small-sfx"
+SA3_REPO_MEDIUM = "stabilityai/stable-audio-3-medium"
 SA3_LICENSE = "https://stability.ai/license"
 SA3_LICENSE_NAME = "Stability AI Community License"
 SA3_COMMON_NOTES = (
@@ -199,7 +211,7 @@ MODELS: tuple[ModelSpec, ...] = (
         license_name="Apache 2.0",
         license_url=APACHE_2,
         notes=(
-            "The safe default for 6 GB cards such as a GTX 1060.",
+            "The safe default for GPUs with limited memory.",
             "Runs on CPU, but a sentence takes minutes rather than seconds.",
         ),
     ),
@@ -288,7 +300,7 @@ MODELS: tuple[ModelSpec, ...] = (
         license_name="Stellon Labs Community License",
         license_url=KITTEN_LICENSE,
         notes=KITTEN_NOTES + (
-            "Choose this if disk space is tight; it is the variant tested on a 6 GB GTX 1060.",
+            "Choose this if disk space is tight.",
         ),
     ),
     ModelSpec(
@@ -333,6 +345,27 @@ MODELS: tuple[ModelSpec, ...] = (
         ),
     ),
     ModelSpec(
+        id="acestep-1.5-base",
+        repo_id="ACE-Step/acestep-v15-base",
+        title="ACE-Step 1.5 (base)",
+        category="music",
+        engine="acestep",
+        summary="The untuned foundation model the other variants are derived from. "
+                "50 steps, so slower than turbo; mostly for comparing or experimenting.",
+        size_bytes=int(4.79 * GB),
+        needs_gpu=True,
+        optional_engine=True,
+        extra_files=ACESTEP_SHARED,
+        license_name="MIT",
+        license_url=ACESTEP_LICENSE,
+        notes=ACESTEP_NOTES + (
+            "Reuses the text encoder and VAE of the turbo download "
+            "(about 1.5 GB), so delete this one first if you remove turbo.",
+            "Not tested on a real card yet. The app uses it for plain text to music, "
+            "like the other variants.",
+        ),
+    ),
+    ModelSpec(
         id="acestep-1.5-xl-turbo",
         repo_id="ACE-Step/acestep-v15-xl-turbo",
         title="ACE-Step 1.5 XL (turbo)",
@@ -353,6 +386,46 @@ MODELS: tuple[ModelSpec, ...] = (
         ),
     ),
     ModelSpec(
+        id="acestep-1.5-xl-sft",
+        repo_id="ACE-Step/acestep-v15-xl-sft",
+        title="ACE-Step 1.5 XL (quality)",
+        category="music",
+        engine="acestep",
+        summary="The larger DiT with the quality fine-tune: slower than XL turbo, "
+                "a 20 GB download that wants a big GPU.",
+        size_bytes=int(19.95 * GB),
+        needs_gpu=True,
+        optional_engine=True,
+        extra_files=ACESTEP_SHARED,
+        license_name="MIT",
+        license_url=ACESTEP_LICENSE,
+        notes=ACESTEP_NOTES + (
+            "Choose this only with a large GPU. Not tested on a real card yet.",
+            "Reuses the text encoder and VAE of the turbo download "
+            "(about 1.5 GB), so delete this one first if you remove turbo.",
+        ),
+    ),
+    ModelSpec(
+        id="acestep-1.5-xl-base",
+        repo_id="ACE-Step/acestep-v15-xl-base",
+        title="ACE-Step 1.5 XL (base)",
+        category="music",
+        engine="acestep",
+        summary="The untuned larger foundation model. 50 steps and a 20 GB download; "
+                "mostly for comparing or experimenting, with a big GPU.",
+        size_bytes=int(19.95 * GB),
+        needs_gpu=True,
+        optional_engine=True,
+        extra_files=ACESTEP_SHARED,
+        license_name="MIT",
+        license_url=ACESTEP_LICENSE,
+        notes=ACESTEP_NOTES + (
+            "Choose this only with a large GPU. Not tested on a real card yet.",
+            "Reuses the text encoder and VAE of the turbo download "
+            "(about 1.5 GB), so delete this one first if you remove turbo.",
+        ),
+    ),
+    ModelSpec(
         id="moss-sfx-v2",
         repo_id=MOSS_SFX_REPO,
         title="MOSS-SoundEffect v2",
@@ -366,9 +439,7 @@ MODELS: tuple[ModelSpec, ...] = (
         license_name="Apache 2.0",
         license_url=APACHE_2,
         notes=(
-            "An 11 GB download. On a 6 GB card it runs with offloading and takes "
-            "minutes per clip (about 3 minutes in testing); an 8 GB+ card is far "
-            "more comfortable.",
+            "An 11 GB download.",
             "A 3 s effect costs as much as a 30 s one: the model always renders 30 s and crops.",
             "Needs an NVIDIA GPU.",
         ),
@@ -392,6 +463,35 @@ MODELS: tuple[ModelSpec, ...] = (
         gated=True,
         notes=SA3_COMMON_NOTES + (
             "Instrumental only: its documentation doesn't mention lyrics.",
+        ),
+    ),
+    ModelSpec(
+        id="sa3-medium-music",
+        repo_id=SA3_REPO_MEDIUM,
+        title="Stable Audio 3 Medium (music)",
+        category="music",
+        engine="sa3_music",
+        summary="The larger Stable Audio model: music up to 6 minutes 20 seconds at "
+                "44.1 kHz stereo. For RTX 30 series cards and newer. No vocals.",
+        size_bytes=int(8 * GB),
+        companion=COMPANION_SA3_TEXT_ENCODER,
+        companion_bytes=int(1.2 * GB),
+        needs_gpu=True,
+        optional_engine=True,
+        license_tier=TIER_CONDITIONAL,
+        license_name=SA3_LICENSE_NAME,
+        license_url=SA3_LICENSE,
+        gated=True,
+        min_capability=8,
+        requirement="Needs an NVIDIA RTX 30 series card or newer (Stability's page lists "
+                    "Flash Attention 2 as a requirement for this model).",
+        max_seconds=380.0,
+        notes=SA3_COMMON_NOTES + (
+            "Instrumental only, like the Small model.",
+            "The download size is an estimate; the Models page shows the real figure "
+            "once it is on disk.",
+            "Not yet verified on a real card: if it fails to load on yours, the error "
+            "says why, and the Small model keeps working.",
         ),
     ),
     ModelSpec(
@@ -481,15 +581,38 @@ def _env_override(engine: str) -> str | None:
     return (os.environ.get(var) or None) if var else None
 
 
+_assumed: ContextVar[str | None] = ContextVar("assumed_model", default=None)
+
+
+@contextmanager
+def assume_model(model_id: str | None) -> Iterator[None]:
+    """Answer `active_model` as if `model_id` were its engine's saved choice.
+
+    A request can name a model other than the active one. Whatever depends on the
+    checkpoint (a clip-length limit, default steps, a label) is asked inside this
+    block, so it is answered for the model the job will use, without touching the
+    saved choice. Local to the calling thread / task; nothing is persisted.
+    """
+    token = _assumed.set(model_id)
+    try:
+        yield
+    finally:
+        _assumed.reset(token)
+
+
 def active_model(engine: str) -> ModelSpec:
     """The catalog entry `engine` will load, ignoring environment overrides.
 
-    Order: the saved choice (a model id) → a legacy saved repo id → the
-    engine's default entry.
+    Order: a model assumed by `assume_model` → the saved choice (a model id) → a
+    legacy saved repo id → the engine's default entry.
     """
     specs = for_engine(engine)
     if not specs:
         raise KeyError(f"unknown engine: {engine}")
+
+    assumed = _BY_ID.get(_assumed.get() or "")
+    if assumed is not None and assumed.engine == engine:
+        return assumed
 
     settings = config.load_settings()
 

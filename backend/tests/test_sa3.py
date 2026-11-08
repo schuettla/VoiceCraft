@@ -242,7 +242,11 @@ class FakeHub:
 
         self.calls.append({"repo": repo_id, "token": token, **kwargs})
         if repo_id in self.refused:
-            raise GatedRepoError("401 Client Error: gated repo")
+            # Newer huggingface_hub versions require the HTTP response on the error.
+            import httpx  # noqa: PLC0415
+
+            response = httpx.Response(401, request=httpx.Request("GET", f"https://huggingface.co/{repo_id}"))
+            raise GatedRepoError("401 Client Error: gated repo", response=response)
         if repo_id in self.model_configs:
             put_model(self.cache, repo_id, self.model_configs[repo_id])
         elif repo_id == "stabilityai/x":
@@ -617,6 +621,66 @@ def test_adapter() -> None:
         check("NaN audio is an error, not a silent file", "invalid audio" in message, message)
         FakeStableAudioModel.nan = False
 
+        # --- starting from a clip ---
+        import numpy as np  # noqa: PLC0415
+
+        source = _DATA_DIR / "sa3-out" / "source.wav"
+        sf.write(str(source), (0.3 * np.sin(np.linspace(0, 300, 16000))).astype("float32"), 8000)  # 2 s mono
+        music.generate(AudioSpec("plain", 4.0), out)
+        check("a request without an edit passes no audio inputs to the library",
+              seen["calls"][-1]["extra"] == {}, str(seen["calls"][-1]["extra"]))
+        check("both engines say they can edit",
+              music.supports_editing is True and Sa3SfxBackend().supports_editing is True)
+
+        music.generate(AudioSpec("brighter", 2.0, seed=3, edit="variation", source_path=str(source), strength=0.3), out)
+        call = seen["calls"][-1]
+        rate_in, wave_in = call["extra"]["init_audio"]
+        check("variation: the clip goes in as init_audio, as (rate, samples x channels)",
+              rate_in == 8000 and wave_in.shape == (16000, 1) and wave_in.dtype == np.float32, f"{rate_in} {wave_in.shape}")
+        check("variation: strength is the library's init_noise_level, and nothing is masked",
+              call["extra"]["init_noise_level"] == 0.3 and "inpaint_audio" not in call["extra"], str(call["extra"].keys()))
+        check("variation: the length is passed through", call["duration"] == 2.0)
+        music.generate(AudioSpec("brighter", 2.0, edit="variation", source_path=str(source)), out)
+        check("variation without a strength uses 0.5", seen["calls"][-1]["extra"]["init_noise_level"] == 0.5)
+        music.generate(AudioSpec("brighter", 2.0, edit="variation", source_path=str(source), strength=7.0), out)
+        check("a strength outside 0..1 is clamped", seen["calls"][-1]["extra"]["init_noise_level"] == 1.0)
+
+        music.generate(AudioSpec("new bridge", 2.0, edit="replace", source_path=str(source), region=(0.5, 1.25)), out)
+        extra = seen["calls"][-1]["extra"]
+        check("replace: the clip is the inpaint source and the region is masked in seconds",
+              extra["inpaint_audio"][0] == 8000 and extra["inpaint_mask_start_seconds"] == 0.5
+              and extra["inpaint_mask_end_seconds"] == 1.25 and "init_audio" not in extra, str(extra.keys()))
+
+        music.generate(AudioSpec("keep going", 5.0, edit="extend", source_path=str(source)), out)
+        extra, call = seen["calls"][-1]["extra"], seen["calls"][-1]
+        check("extend: everything after the clip is the masked part",
+              extra["inpaint_mask_start_seconds"] == 2.0 and extra["inpaint_mask_end_seconds"] == 5.0
+              and call["duration"] == 5.0, str(extra))
+        data, rate = sf.read(str(out), dtype="float32")
+        check("the written clip is the new length", abs(len(data) / rate - 5.0) < 0.01)
+
+        for label, spec, word in (
+            ("an edit without its clip", AudioSpec("x", 2.0, edit="variation"), "clip to start from"),
+            ("replace without a region", AudioSpec("x", 2.0, edit="replace", source_path=str(source)), "which part"),
+            ("an extension that is not longer than the clip", AudioSpec("x", 2.0, edit="extend", source_path=str(source)), "longer than the clip"),
+            ("an unknown edit", AudioSpec("x", 2.0, edit="remix", source_path=str(source)), "unknown edit"),
+        ):
+            try:
+                music.generate(spec, out)
+                message = ""
+            except ValueError as exc:
+                message = str(exc)
+            check(f"{label} is refused with a reason", word in message, message)
+
+        empty = _DATA_DIR / "sa3-out" / "empty.wav"
+        sf.write(str(empty), np.zeros(0, dtype="float32"), 8000)
+        try:
+            music.generate(AudioSpec("x", 2.0, edit="variation", source_path=str(empty)), out)
+            message = ""
+        except ValueError as exc:
+            message = str(exc)
+        check("a clip with no audio in it is refused", "no audio" in message, message)
+
         music.unload()
         try:
             music._generate(AudioSpec("x", 3.0), out)
@@ -713,12 +777,68 @@ def test_api() -> None:
         hf_token.clear()
 
 
+def test_medium() -> None:
+    print("medium: a bigger model for bigger cards")
+    real_hardware = devices.hardware
+    medium = catalog.get("sa3-medium-music")
+    small = catalog.get("sa3-small-music")
+    check("the entry exists: gated, the music engine, same text encoder as Small",
+          medium is not None and medium.engine == "sa3_music" and medium.gated
+          and medium.companion == small.companion and medium.repo_id == catalog.SA3_REPO_MEDIUM)
+    check("it needs compute capability 8 (RTX 30 series) and says so in words",
+          medium.min_capability == 8 and "RTX 30" in medium.requirement)
+    check("Small has no requirement", small.min_capability == 0 and small.requirement == "")
+    check("Small stays the engine's default model", catalog.active_model("sa3_music").id == "sa3-small-music")
+    check("the same engine serves both, so installing it once is enough",
+          [s.id for s in catalog.for_engine("sa3_music")] == ["sa3-small-music", "sa3-medium-music"])
+    try:
+        for label, hardware, blocked in (
+            ("no GPU", devices.Hardware(), True),
+            ("Pascal (6.1)", devices.Hardware(True, (6, 1), 6 * GIB, "gpu"), True),
+            ("Turing (7.5)", devices.Hardware(True, (7, 5), 8 * GIB, "gpu"), True),
+            ("Ampere (8.6)", devices.Hardware(True, (8, 6), 12 * GIB, "gpu"), False),
+            ("Ada (8.9)", devices.Hardware(True, (8, 9), 16 * GIB, "gpu"), False),
+        ):
+            devices.hardware = lambda h=hardware: h
+            reason = model_service.unavailable_reason(medium)
+            check(f"{label}: Medium is {'unavailable, with a reason' if blocked else 'available'}",
+                  (reason is not None and "RTX 30" in reason) if blocked else reason is None, str(reason))
+            check(f"{label}: Small is always available", model_service.unavailable_reason(small) is None)
+        devices.hardware = lambda: devices.Hardware(True, (6, 1), 6 * GIB, "gpu")
+        entry = model_service.describe(medium)
+        check("the Models page entry carries the reason", entry["unavailable_reason"] and entry["id"] == "sa3-medium-music")
+        check("…and Small's is empty", model_service.describe(small)["unavailable_reason"] is None)
+        check("downloading it on a card that can't run it is refused with the reason, before any token talk",
+              _raises(model_service.ModelError, model_service.start_download, "sa3-medium-music"))
+        check("…and so is choosing it", _raises(model_service.ModelError, model_service.select, "sa3-medium-music"))
+        check("no job was created", model_service._job("sa3-medium-music") is None)
+
+        music = Sa3MusicBackend()
+        check("the engine's name follows the checkpoint in use", music.label == "Stable Audio 3 Small")
+        config.save_settings({catalog.ACTIVE_SETTING: {"sa3_music": "sa3-medium-music"}})
+        check("…Medium when that is chosen", music.label == "Stable Audio 3 Medium")
+        support = music.support()
+        check("chosen on a card that can't run it, the engine is unsupported and says what to do",
+              not support.ok and "RTX 30" in support.reason and "Small" in support.reason, str(support))
+        devices.hardware = lambda: devices.Hardware(True, (8, 6), 12 * GIB, "gpu")
+        support = music.support()
+        check("on an Ampere card it is supported, up to 6 min 20 s",
+              support.ok and support.max_duration_seconds == 380, str(support))
+        config.clear_setting(catalog.ACTIVE_SETTING)
+        check("with Small chosen the limit is 2 minutes again", music.support().max_duration_seconds == 120)
+        check("effects stay capped at 30 s", Sa3SfxBackend().support().max_duration_seconds == 30)
+    finally:
+        devices.hardware = real_hardware
+        config.clear_setting(catalog.ACTIVE_SETTING)
+
+
 def main() -> int:
     test_encoder_config()
     test_token_store()
     test_catalog_entries()
     test_downloads()
     test_adapter()
+    test_medium()
     test_api()          # last: closing the TestClient shuts the worker executor down
     print(f"\n{PASSED} passed, {FAILED} failed  (data dir: {_DATA_DIR})")
     return 1 if FAILED else 0

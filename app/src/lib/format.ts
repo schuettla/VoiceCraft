@@ -29,9 +29,23 @@ export function formatBytes(bytes: number | null | undefined): string {
   return `${value < 10 && unit > 0 ? value.toFixed(1) : Math.round(value)} ${units[unit]}`;
 }
 
+/** "2h 5m" / "45s" — a total length of audio, where m:ss would read 125:03. */
+export function formatTotal(seconds: number): string {
+  const total = Math.max(0, Math.round(seconds));
+  if (total < 60) return `${total}s`;
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  if (hours === 0) return `${minutes}m ${total % 60}s`;
+  return `${hours}h ${minutes}m`;
+}
+
+/** The backend stores naive UTC; mark it as such so local time is right. */
+export function parseWhen(iso: string): Date {
+  return new Date(/[zZ]|[+-]\d{2}:\d{2}$/.test(iso) ? iso : `${iso}Z`);
+}
+
 export function formatWhen(iso: string): string {
-  // The backend stores naive UTC; mark it as such so local time is right.
-  const date = new Date(/[zZ]|[+-]\d{2}:\d{2}$/.test(iso) ? iso : `${iso}Z`);
+  const date = parseWhen(iso);
   const elapsed = (Date.now() - date.getTime()) / 1000;
   if (elapsed < 60) return "just now";
   if (elapsed < 3600) return `${Math.floor(elapsed / 60)}m ago`;

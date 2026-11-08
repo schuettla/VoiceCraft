@@ -26,10 +26,12 @@ from __future__ import annotations
 import gc
 import logging
 import random
+import tempfile
 import time
 from pathlib import Path
 
 import catalog
+from utils import audio as media
 from backends import device as devices
 from backends import sa3_files
 from backends.audio_engines import PackagedAudioBackend
@@ -51,6 +53,26 @@ SA3_SILENT_PEAK = 0.01   # below this the clip is flagged as nearly silent
 FP16_MIN_CAPABILITY = 7
 
 
+def read_source(path: str | Path) -> tuple["np.ndarray", int]:
+    """Decode the clip an edit starts from: float32, (samples, channels), and its rate.
+
+    soundfile reads WAV, FLAC and OGG everywhere and MP3 on a recent libsndfile;
+    anything it refuses goes through ffmpeg, which the app already depends on.
+    """
+    import soundfile as sf  # noqa: PLC0415
+
+    try:
+        data, rate = sf.read(str(path), dtype="float32", always_2d=True)
+    except Exception:  # noqa: BLE001 - any decode failure falls back to ffmpeg
+        with tempfile.TemporaryDirectory() as folder:
+            wav = Path(folder) / "source.wav"
+            media.convert(path, wav)
+            data, rate = sf.read(str(wav), dtype="float32", always_2d=True)
+    if data.shape[0] == 0:
+        raise ValueError(f"{Path(path).name} has no audio in it")
+    return data, int(rate)
+
+
 class Sa3Backend(PackagedAudioBackend):
     """Shared by the music and sound-effect engines; subclasses name themselves."""
 
@@ -59,8 +81,12 @@ class Sa3Backend(PackagedAudioBackend):
     # Documented for neither checkpoint, so a request with lyrics is refused
     # instead of being quietly sung as "text".
     supports_lyrics = False
-    label = "Stable Audio 3 Small"
+    # Variation, extending a clip and replacing a part of it (the library's
+    # `init_audio` and `inpaint_audio` inputs).
+    supports_editing = True
     max_seconds = SA3_MAX_SECONDS
+    # A hard ceiling for the engine's kind whatever the checkpoint can do (0 = none).
+    cap_seconds = 0.0
 
     def __init__(self) -> None:
         super().__init__()
@@ -150,12 +176,16 @@ class Sa3Backend(PackagedAudioBackend):
         if spec.lyrics:
             raise ValueError(f"{self.label} can't sing lyrics; use ACE-Step for vocals.")
 
-        seconds = min(max(float(spec.duration_seconds), SA3_MIN_SECONDS), SA3_MAX_SECONDS)
+        seconds = min(max(float(spec.duration_seconds), SA3_MIN_SECONDS), self._limit())
         seed = spec.seed if spec.seed is not None else random.randrange(2**31)
         steps = spec.steps or SA3_STEPS
         guidance = spec.guidance if spec.guidance is not None else SA3_GUIDANCE
 
-        log.info("%s: %.1f s, %d steps, seed %d", self.name, seconds, steps, seed)
+        edits = self._edit_inputs(spec, seconds)
+        log.info(
+            "%s: %.1f s, %d steps, seed %d%s", self.name, seconds, steps, seed,
+            f", {spec.edit}" if spec.edit else "",
+        )
         started = time.monotonic()
         try:
             audio = model.generate(
@@ -168,6 +198,7 @@ class Sa3Backend(PackagedAudioBackend):
                 # The same value the library's own CLI passes: the checkpoint's
                 # trained length, from which the real latent size is derived.
                 sample_size=model.model_config["sample_size"],
+                **edits,
             )
         finally:
             devices.release_gpu_memory()
@@ -191,16 +222,86 @@ class Sa3Backend(PackagedAudioBackend):
             ),
         )
 
+    @staticmethod
+    def _edit_inputs(spec: AudioSpec, seconds: float) -> dict:
+        """The extra `generate()` arguments for a variation, an extension or a replacement.
+
+        - variation: the clip is the starting point and `init_noise_level` is how
+          much of it is thrown away (1.0 = all of it);
+        - replace: the clip is the inpaint source and the region is masked out
+          (mask 0 = regenerate), the rest is kept;
+        - extend: the same, with the "region" being everything after the clip.
+        """
+        if not spec.edit:
+            return {}
+        if not spec.source_path:
+            raise ValueError("an edit needs the clip to start from")
+        data, rate = read_source(spec.source_path)
+        source = (rate, data)
+        if spec.edit == "variation":
+            strength = 0.5 if spec.strength is None else spec.strength
+            return {"init_audio": source, "init_noise_level": min(max(strength, 0.0), 1.0)}
+        if spec.edit == "replace":
+            if not spec.region:
+                raise ValueError("say which part to replace")
+            start, end = spec.region
+            return {
+                "inpaint_audio": source,
+                "inpaint_mask_start_seconds": float(start),
+                "inpaint_mask_end_seconds": float(end),
+            }
+        if spec.edit == "extend":
+            length = data.shape[0] / rate
+            if seconds <= length:
+                raise ValueError("the result has to be longer than the clip it extends")
+            return {
+                "inpaint_audio": source,
+                "inpaint_mask_start_seconds": float(length),
+                "inpaint_mask_end_seconds": float(seconds),
+            }
+        raise ValueError(f"unknown edit {spec.edit!r}")
+
+    @property
+    def label(self) -> str:  # type: ignore[override]
+        """"Stable Audio 3 Small" or "... Medium", whichever checkpoint is chosen."""
+        try:
+            return catalog.active_model(self.name).title.split(" (")[0]
+        except KeyError:
+            return "Stable Audio 3"
+
+    def _limit(self) -> float:
+        """The longest clip the checkpoint in use makes (Medium does more than Small)."""
+        try:
+            chosen = catalog.active_model(self.name).max_seconds
+        except KeyError:
+            chosen = 0.0
+        limit = chosen or self.max_seconds
+        return min(limit, self.cap_seconds) if self.cap_seconds else limit
+
     def support(self) -> Support:
         hardware = devices.hardware()
+        # A bigger checkpoint chosen on the Models page needs a better card. Say so
+        # instead of letting the load fail.
+        try:
+            spec = catalog.active_model(self.name)
+        except KeyError:
+            spec = None
+        if spec is not None and spec.min_capability:
+            major = hardware.capability[0] if hardware.capability else 0
+            if not hardware.cuda or major < spec.min_capability:
+                return Support(
+                    False,
+                    reason=f"{spec.title} can't run on this machine. {spec.requirement} "
+                           "Pick the Small model on the Models page.",
+                )
         if hardware.cuda:
-            return Support(True, max_duration_seconds=self.max_seconds)
+            return Support(True, max_duration_seconds=self._limit())
         return Support(
             True,
             warning="No NVIDIA GPU was found, so this runs on the CPU. The model is "
                     "built for that, but how long a clip takes on this machine has not "
                     "been measured.",
-            max_duration_seconds=self.max_seconds,
+            max_duration_seconds=self._limit(),
         )
 
 
@@ -216,3 +317,4 @@ class Sa3SfxBackend(Sa3Backend):
     # The checkpoint can do 120 s, but a sound effect request is capped at 30 s
     # for every engine (`models.SFX_MAX_SECONDS`), so say what the app will accept.
     max_seconds = 30.0
+    cap_seconds = 30.0

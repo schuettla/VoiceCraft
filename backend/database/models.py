@@ -6,7 +6,7 @@ import datetime as dt
 import uuid
 from pathlib import Path
 
-from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -87,6 +87,10 @@ class Generation(Base):
     warning: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=_now)
     completed_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
+    # Starred in the Library — the user's own "keep this one" marker.
+    favorite: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="0"
+    )
 
     profile: Mapped["Profile | None"] = relationship(back_populates="generations")
 

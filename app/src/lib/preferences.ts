@@ -15,6 +15,12 @@ export const DEFAULT_PREFERENCES: Preferences = {
   default_language: "en",
   default_output_format: "mp3",
   default_crossfade_ms: 0,
+  default_music_seconds: 30,
+  default_music_vocals: "instrumental",
+  default_sfx_seconds: 3,
+  default_sfx_takes: 1,
+  default_kitten_style: "stable",
+  idle_unload_minutes: 10,
 };
 
 let cache: Preferences | null = null;

@@ -49,6 +49,7 @@ _ADDED_COLUMNS: dict[str, dict[str, str]] = {
         "kind": "VARCHAR(8) NOT NULL DEFAULT 'speech'",
         "engine": "VARCHAR(32)",
         "params": "TEXT",
+        "favorite": "BOOLEAN NOT NULL DEFAULT 0",
     },
 }
 

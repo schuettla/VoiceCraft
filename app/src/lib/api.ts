@@ -1,5 +1,6 @@
 import type { Resources,
   Asset,
+  AudioEditRequest,
   AudioEngine,
   AudioFormat,
   AudioKind,
@@ -109,6 +110,8 @@ export const api = {
   generateAudio: (body: {
     kind: AudioKind;
     engine?: string;
+    /** A catalog entry; it names its engine. Omitted: the engine's active model. */
+    model_id?: string;
     prompt: string;
     duration_seconds: number;
     lyrics?: string;
@@ -118,17 +121,23 @@ export const api = {
     /** Sound effects only, 1–4. */
     takes?: number;
     output_format?: AudioFormat;
+    /** Start from an existing clip; `duration_seconds` is then the result's length. */
+    edit?: AudioEditRequest;
   }) => request<Generation[]>("/api/generations/audio", json(body)),
   generate: (body: {
     profile_id: string;
     text: string;
     speed?: number;
     output_format?: AudioFormat;
+    /** A checkpoint of the voice's engine. Omitted: the engine's active model. */
+    model_id?: string;
     /** KittenTTS 2 only; other engines ignore them. */
     preset?: KittenStyle;
     seed?: number;
   }) => request<Generation>("/api/generations", json(body)),
   getGeneration: (id: string) => request<Generation>(`/api/generations/${id}`),
+  setFavorite: (id: string, favorite: boolean) =>
+    request<Generation>(`/api/generations/${id}`, { ...json({ favorite }), method: "PATCH" }),
   deleteGeneration: (id: string) =>
     request<void>(`/api/generations/${id}`, { method: "DELETE" }),
 

@@ -15,17 +15,18 @@ import { Button } from "@/components/ui/button";
  * reports it (null while that call is in flight or when the backend doesn't know
  * of one).
  */
-export function EngineGate({
+export function EngineGate<E extends AudioEngine>({
   engine,
   passedOver = null,
   loading,
   subject,
   noun,
   plural = false,
+  lead = null,
   onOpenModels,
   children,
 }: {
-  engine: AudioEngine | null;
+  engine: E | null;
   /**
    * The kind's usual engine, when this machine can't run it and `engine` is the
    * lighter one offered instead (ACE-Step on a PC without an NVIDIA GPU).
@@ -38,8 +39,10 @@ export function EngineGate({
   noun: string;
   /** "Sound effects aren't installed", but "Music generation isn't". */
   plural?: boolean;
+  /** Why this engine is the one on offer, shown above whatever card is needed. */
+  lead?: ReactNode;
   onOpenModels: () => void;
-  children: (engine: AudioEngine) => ReactNode;
+  children: (engine: E) => ReactNode;
 }) {
   if (loading && !engine) {
     return <p className="py-8 text-sm text-muted-foreground">Checking {noun} engine…</p>;
@@ -57,9 +60,12 @@ export function EngineGate({
     : "";
   if (!engine.supported) {
     return (
-      <EngineCard engine={engine} title={`${subject} can't run on this machine`}>
-        <p>{engine.unsupported_reason}</p>
-      </EngineCard>
+      <>
+        {lead && <Notice tone="info" className="mb-3">{lead}</Notice>}
+        <EngineCard engine={engine} title={`${subject} can't run on this machine`}>
+          <p>{engine.unsupported_reason}</p>
+        </EngineCard>
+      </>
     );
   }
   // A gated model needs the user's Hugging Face token before it can download, so
@@ -67,6 +73,8 @@ export function EngineGate({
   const needsToken = engine.gated && !engine.model_downloaded;
   if (!engine.installed) {
     return (
+      <>
+      {lead && <Notice tone="info" className="mb-3">{lead}</Notice>}
       <EngineCard
         engine={engine}
         passedOver={passedOver}
@@ -83,10 +91,13 @@ export function EngineGate({
         </p>
         {needsToken && <GatedStep engine={engine} />}
       </EngineCard>
+      </>
     );
   }
   if (!engine.model_downloaded) {
     return (
+      <>
+      {lead && <Notice tone="info" className="mb-3">{lead}</Notice>}
       <EngineCard
         engine={engine}
         passedOver={passedOver}
@@ -103,6 +114,7 @@ export function EngineGate({
         </p>
         {needsToken && <GatedStep engine={engine} />}
       </EngineCard>
+      </>
     );
   }
   return <>{children(engine)}</>;
@@ -153,7 +165,6 @@ function EngineCard({
       <div className="space-y-2 text-[13px] leading-relaxed text-muted-foreground">
         {children}
       </div>
-      {engine.supported && engine.warning && <Notice tone="warn">{engine.warning}</Notice>}
       {action}
     </div>
   );

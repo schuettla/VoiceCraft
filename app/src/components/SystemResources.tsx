@@ -5,6 +5,7 @@ import type { Resources } from "@/lib/types";
 import { formatBytes } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { Progress } from "@/components/ui/progress";
+import { useSidebar } from "@/components/ui/sidebar";
 import {
   Collapsible,
   CollapsibleContent,
@@ -19,7 +20,13 @@ export function SystemResources() {
   const [data, setData] = useState<Resources | null>(null);
   const [open, setOpen] = useState(true);
 
+  const { state, isMobile } = useSidebar();
+  // The data is only visible while the panel is expanded AND the sidebar is not
+  // an icon rail — only then is it worth asking the backend for it.
+  const visible = open && (isMobile || state === "expanded");
+
   useEffect(() => {
+    if (!visible) return;
     let alive = true;
     const tick = () =>
       api
@@ -32,12 +39,10 @@ export function SystemResources() {
       alive = false;
       window.clearInterval(timer);
     };
-  }, []);
+  }, [visible]);
 
-  if (!data) return null;
-
-  const ramPct = pct(data.ram_used_bytes, data.ram_total_bytes);
-  const gpuPct = pct(data.gpu_mem_used_bytes, data.gpu_mem_total_bytes);
+  const ramPct = data ? pct(data.ram_used_bytes, data.ram_total_bytes) : null;
+  const gpuPct = data ? pct(data.gpu_mem_used_bytes, data.gpu_mem_total_bytes) : null;
 
   return (
     <Collapsible
@@ -55,6 +60,7 @@ export function SystemResources() {
         />
       </CollapsibleTrigger>
       <CollapsibleContent>
+        {data && (
         <div className="space-y-3 px-4 pb-4">
           {data.ram_total_bytes != null && (
             <Meter
@@ -91,6 +97,7 @@ export function SystemResources() {
             </div>
           )}
         </div>
+        )}
       </CollapsibleContent>
     </Collapsible>
   );

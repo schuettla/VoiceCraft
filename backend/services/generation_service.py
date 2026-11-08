@@ -19,6 +19,7 @@ from pathlib import Path
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
+import catalog
 import config
 from backends import (
     AudioSpec,
@@ -31,6 +32,7 @@ from backends import (
 from database.models import Generation, Profile
 from database.session import session_scope
 from models import GenerateRequest, GenerationStatus
+from services import model_service
 from utils import audio
 from utils.paths import slugify, unique_path
 
@@ -48,7 +50,27 @@ _executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="tts")
 #   * once nothing has run for IDLE_UNLOAD_SECONDS, the loaded engine is
 #     unloaded too, so an open-but-idle app doesn't hold the GPU. 0 disables it.
 
-IDLE_UNLOAD_SECONDS = float(os.environ.get("VOICECRAFT_IDLE_UNLOAD_SECONDS", "600"))
+# `VOICECRAFT_IDLE_UNLOAD_SECONDS` wins when set (0 disables); otherwise the
+# "idle_unload_minutes" preference from Settings decides, and is read each time so
+# a change applies without a restart.
+_IDLE_ENV = os.environ.get("VOICECRAFT_IDLE_UNLOAD_SECONDS")
+IDLE_UNLOAD_SECONDS: float | None = float(_IDLE_ENV) if _IDLE_ENV not in (None, "") else None
+DEFAULT_IDLE_MINUTES = 10
+
+
+def idle_seconds() -> float:
+    """How long the worker may sit idle before models are unloaded (0 = never)."""
+    if IDLE_UNLOAD_SECONDS is not None:
+        return IDLE_UNLOAD_SECONDS
+    try:
+        minutes = float(
+            (config.load_settings().get("preferences") or {}).get(
+                "idle_unload_minutes", DEFAULT_IDLE_MINUTES
+            )
+        )
+    except (TypeError, ValueError):
+        minutes = DEFAULT_IDLE_MINUTES
+    return max(minutes, 0.0) * 60
 
 _state_lock = threading.Lock()
 _pending = 0                       # jobs submitted and not yet finished
@@ -64,8 +86,29 @@ def release_other_engines(engine: str) -> None:
         log.info("unloaded %s to make room for %s", ", ".join(dropped), engine)
 
 
+_worker_flag = threading.local()
+
+
+def on_worker() -> bool:
+    """True when called from the job worker (between or inside jobs)."""
+    return getattr(_worker_flag, "active", False)
+
+
+def run_on_worker(fn, *args) -> None:
+    """Run `fn` on the worker: now if this *is* the worker, else after the queued jobs.
+
+    For things that must not happen under a running job, such as unloading the
+    engine it is using when the Models page picks or deletes a model.
+    """
+    if on_worker():
+        fn(*args)
+    else:
+        submit(fn, *args)
+
+
 def _tracked(fn, args) -> None:
     global _pending, _last_activity
+    _worker_flag.active = True
     try:
         fn(*args)
     finally:
@@ -78,21 +121,34 @@ def _idle_check() -> bool:
     """Unload everything if the worker has been idle long enough. True if it did."""
     # The lock is held across the unload: `submit` takes it to count a new job,
     # so a job can't be queued while the models it needs are being torn down.
-    if IDLE_UNLOAD_SECONDS <= 0:
+    limit = idle_seconds()
+    if limit <= 0:
         return False
     with _state_lock:
-        if _pending or time.monotonic() - _last_activity < IDLE_UNLOAD_SECONDS:
+        if _pending or time.monotonic() - _last_activity < limit:
             return False
         if not any(backend.is_loaded() for backend in all_backends().values()):
             return False
-        log.info("idle for %.0fs — unloading models", IDLE_UNLOAD_SECONDS)
+        log.info("idle for %.0fs — unloading models", limit)
         unload_all()
         return True
 
 
+def _watch_interval() -> float:
+    """How long the watcher sleeps between checks.
+
+    With idle unload switched off (0) there is nothing to time, so it only looks
+    every 30 s in case Settings turns it back on, instead of reading the settings
+    file twice a second.
+    """
+    limit = idle_seconds()
+    if limit <= 0:
+        return 30.0
+    return min(30.0, max(0.5, limit / 4))
+
+
 def _watch_idle() -> None:
-    interval = min(30.0, max(0.5, IDLE_UNLOAD_SECONDS / 4))
-    while not _watcher_stop.wait(interval):
+    while not _watcher_stop.wait(_watch_interval()):
         try:
             _idle_check()
         except Exception:  # noqa: BLE001 - the watcher must outlive a bad unload
@@ -101,7 +157,7 @@ def _watch_idle() -> None:
 
 def _ensure_watcher() -> None:
     global _watcher
-    if IDLE_UNLOAD_SECONDS <= 0 or (_watcher and _watcher.is_alive()):
+    if idle_seconds() <= 0 or (_watcher and _watcher.is_alive()):
         return
     _watcher_stop.clear()
     _watcher = threading.Thread(target=_watch_idle, name="idle-unload", daemon=True)
@@ -145,6 +201,17 @@ def get_generation(session: Session, generation_id: str) -> Generation | None:
     return session.get(Generation, generation_id)
 
 
+def set_favorite(
+    session: Session, generation_id: str, favorite: bool
+) -> Generation | None:
+    generation = session.get(Generation, generation_id)
+    if generation is None:
+        return None
+    generation.favorite = favorite
+    session.commit()
+    return generation
+
+
 def reset_stale_jobs() -> int:
     """Fail any job left mid-flight by a crash or a hard app close.
 
@@ -181,11 +248,37 @@ def enqueue(session: Session, request: GenerateRequest) -> Generation:
         if request.seed is not None:
             options["seed"] = request.seed
 
+    # Which checkpoint makes it: the one asked for, else the engine's active one.
+    model = None
+    if request.model_id:
+        model = catalog.get(request.model_id)
+        if model is None:
+            raise GenerationError(f"unknown model {request.model_id!r}")
+        if model.engine != profile.engine:
+            raise GenerationError(
+                f"{model.title} belongs to {model.engine!r}, but this voice uses "
+                f"{profile.engine!r}"
+            )
+        if not model_service.spec_downloaded(model):
+            raise EngineNotReady(
+                f"{model.title} is not downloaded yet. Get it from the Models page."
+            )
+        reason = model_service.unavailable_reason(model)
+        if reason:
+            raise EngineNotReady(f"{model.title} can't run on this machine. {reason}")
+    else:
+        try:
+            model = catalog.active_model(profile.engine)
+        except KeyError:
+            model = None
+    # Recorded for the lists; it stays out of `VoiceSpec.options`, which is what the engine reads.
+    recorded = {**options, **({"model": model.id} if model else {})}
+
     generation = Generation(
         profile_id=profile.id,
         kind="speech",
         engine=profile.engine,
-        params=json.dumps(options) if options else None,
+        params=json.dumps(recorded) if recorded else None,
         text=request.text,
         status=GenerationStatus.queued.value,
     )
@@ -207,7 +300,10 @@ def enqueue(session: Session, request: GenerateRequest) -> Generation:
         f"{slugify(profile.name, 'voice')}-{generation.id[:8]}",
         f".{request.output_format}",
     )
-    submit(_run_job, generation.id, profile.engine, voice, out_path, request.text)
+    submit(
+        _run_job, generation.id, profile.engine, voice, out_path, request.text,
+        request.model_id,
+    )
     return generation
 
 
@@ -224,24 +320,43 @@ def _run_job(
     voice: VoiceSpec,
     out_path: Path,
     text: str,
+    model_id: str | None = None,
 ) -> None:
     _execute(
         generation_id, engine, out_path,
         lambda backend, raw_path: backend.synthesize(text, voice, raw_path),
+        model_id,
     )
 
 
 def run_audio_job(
-    generation_id: str, engine: str, spec: AudioSpec, out_path: Path
+    generation_id: str, engine: str, spec: AudioSpec, out_path: Path,
+    model_id: str | None = None,
 ) -> None:
     """A music / SFX job: same queue, same status writes, a different engine call."""
     _execute(
         generation_id, engine, out_path,
         lambda backend, raw_path: backend.generate(spec, raw_path),
+        model_id,
     )
 
 
-def _execute(generation_id: str, engine: str, out_path: Path, produce) -> None:
+def _use_model(model_id: str | None) -> None:
+    """Make `model_id` the checkpoint its engine loads, if it isn't already.
+
+    Runs on the worker between jobs, so no other job is using the engine: the
+    unload that `select` does can't pull weights out from under a running one.
+    Making the choice the saved one (instead of a per-job override) keeps the
+    Models page and the Generate page agreeing on what is active.
+    """
+    spec = catalog.get(model_id) if model_id else None
+    if spec is not None and not catalog.is_active(spec):
+        model_service.select(spec.id)
+
+
+def _execute(
+    generation_id: str, engine: str, out_path: Path, produce, model_id: str | None = None
+) -> None:
     """Run one job on the worker: `produce(backend, wav_path)` makes the audio.
 
     Everything around the engine call — the unload-before-job rule, the status
@@ -256,6 +371,7 @@ def _execute(generation_id: str, engine: str, out_path: Path, produce) -> None:
     wanted = out_path.suffix.lower().lstrip(".")
     raw_path = out_path if wanted == "wav" else out_path.with_suffix(".raw.wav")
     try:
+        _use_model(model_id)
         backend = get_backend(engine)
         result = produce(backend, raw_path)
         final = Path(result.path)

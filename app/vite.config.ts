@@ -7,6 +7,8 @@ import path from "node:path";
 export default defineConfig({
   plugins: [react(), tailwindcss()],
   resolve: { alias: { "@": path.resolve(__dirname, "./src") } },
+  // Relative asset URLs: the built page works from any folder, and inside Tauri.
+  base: "./",
   clearScreen: false,
   server: { port: 5173, strictPort: true },
   build: { outDir: "dist", emptyOutDir: true },

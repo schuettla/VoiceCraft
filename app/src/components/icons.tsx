@@ -14,6 +14,7 @@ import {
   Loader2,
   Trash2,
   TrendingUp,
+  Wand2,
   AudioLines,
   Flag,
   X,
@@ -45,6 +46,7 @@ export const FolderIcon = sized(Folder);
 export const DownloadIcon = sized(Download);
 export const TrashIcon = sized(Trash2);
 export const XIcon = sized(X);
+export const WandIcon = sized(Wand2);
 export const ArrowUpIcon = sized(ArrowUp);
 export const ArrowDownIcon = sized(ArrowDown);
 export const PlusIcon = sized(Plus);

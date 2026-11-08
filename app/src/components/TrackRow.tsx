@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useRef, type ReactNode } from "react";
 import { useAudio, type Track } from "./AudioPlayer";
 import { PlayIcon, PauseIcon, SpinnerIcon, WaveIcon } from "./icons";
 import { Button } from "@/components/ui/button";
@@ -37,10 +37,14 @@ export function TrackRow({
   detail?: ReactNode;
   busy?: boolean;
   selected?: boolean;
-  onSelectedChange?: (next: boolean) => void;
+  /** `range` is true when the box was shift-clicked (extend the selection). */
+  onSelectedChange?: (next: boolean, range: boolean) => void;
   onClick?: () => void;
 }) {
   const audio = useAudio();
+  // Radix reports the new value, not the click — the click handler runs first,
+  // so it leaves the shift state here for onCheckedChange to read.
+  const shift = useRef(false);
   const isCurrent = !!track && audio.track?.id === track.id;
   const isPlaying = isCurrent && audio.playing;
   const playable = !!track && !busy;
@@ -56,7 +60,10 @@ export function TrackRow({
         {onSelectedChange && (
           <Checkbox
             checked={!!selected}
-            onCheckedChange={(next) => onSelectedChange(next === true)}
+            onClick={(event) => {
+              shift.current = event.shiftKey;
+            }}
+            onCheckedChange={(next) => onSelectedChange(next === true, shift.current)}
             aria-label="Select row"
           />
         )}

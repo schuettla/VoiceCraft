@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../lib/api";
 import type {
   AudioEngine,
@@ -6,12 +6,16 @@ import type {
   Generation,
   Health,
   KittenStyle,
+  Model,
   Profile,
 } from "../lib/types";
-import { AUDIO_FORMATS, formatDuration, formatWhen, truncate } from "../lib/format";
+import { AUDIO_FORMATS, formatBytes, formatDuration, formatWhen, truncate } from "../lib/format";
+import type { ModelState } from "../lib/engines";
 import { usePreferences } from "../lib/preferences";
 import { useRemembered } from "../lib/remember";
+import type { ClipSource } from "../components/ClipEdit";
 import { KindIcon } from "../components/KindIcon";
+import { LicenseChip, ModelPicker, type ModelOption } from "../components/ModelPicker";
 import { MusicForm } from "../components/MusicForm";
 import { SoundFxForm } from "../components/SoundFxForm";
 import { useToast } from "../components/Toaster";
@@ -32,7 +36,7 @@ import { Input } from "@/components/ui/input";
 import { Separator } from "@/components/ui/separator";
 import { Slider } from "@/components/ui/slider";
 import { Textarea } from "@/components/ui/textarea";
-import { DownloadIcon, FolderIcon, SpinnerIcon, TrashIcon } from "../components/icons";
+import { DownloadIcon, FolderIcon, SpinnerIcon, TrashIcon, WandIcon } from "../components/icons";
 
 const ACTIVE: Generation["status"][] = ["queued", "processing"];
 
@@ -46,30 +50,61 @@ const MODE_DESCRIPTION: Record<Mode, string> = {
   sfx: "Describe a sound and get an effect or an ambience.",
 };
 
+/** Something the Library asks Generate to start from. */
+export type GenerateHandoff =
+  | { kind: "clip"; source: ClipSource }
+  | { kind: "script"; profileId: string; text: string };
+
 export function GeneratePage({
   health,
   onOpenModels,
+  handoff,
+  onHandoffUsed,
 }: {
   health: Health | null;
   /** Take the user to the Models page (install an engine, download weights). */
   onOpenModels: () => void;
+  handoff?: GenerateHandoff | null;
+  /** Called once the hand-off has been applied, so it isn't applied twice. */
+  onHandoffUsed?: () => void;
 }) {
   const toast = useToast();
   const [mode, setMode] = useRemembered<Mode>("voicecraft.generate.mode", "speech", MODES);
   const [engines, setEngines] = useState<AudioEngine[] | null>(null);
+  // Every catalog entry (speech, music, sound effects): the voice form's model list
+  // and the model names shown in the session list.
+  const [models, setModels] = useState<Model[]>([]);
+  // The model picked in the Voice form, per engine (a voice belongs to one engine).
+  const [pickedModels, setPickedModels] = useState<Record<string, string>>({});
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [generations, setGenerations] = useState<Generation[]>([]);
   const [profileId, setProfileId] = useState("");
   const [text, setText] = useState("");
   const [speed, setSpeed] = useState(1);
-  const [style, setStyle] = useState<KittenStyle>("stable");
+  const [chosenStyle, setStyle] = useState<KittenStyle | null>(null);
   const [seed, setSeed] = useState("");
   const [busy, setBusy] = useState(false);
+  // A finished clip the Music / Sound FX form starts from, when the user chose "Edit".
+  const [source, setSource] = useState<ClipSource | null>(null);
   // The engines produce WAV; picking another format transcodes it with ffmpeg
   // as part of the job, so the file that lands is the one asked for.
   const preferences = usePreferences();
   const [chosenFormat, setFormat] = useState<AudioFormat | null>(null);
   const format = chosenFormat ?? preferences.default_output_format;
+  const style = chosenStyle ?? preferences.default_kitten_style;
+
+  useEffect(() => {
+    if (!handoff) return;
+    if (handoff.kind === "clip") {
+      setMode(handoff.source.kind);
+      setSource(handoff.source);
+    } else {
+      setMode("speech");
+      setProfileId(handoff.profileId);
+      setText(handoff.text);
+    }
+    onHandoffUsed?.();
+  }, [handoff, onHandoffUsed, setMode]);
 
   const refresh = useCallback(async () => {
     try {
@@ -104,10 +139,35 @@ export function GeneratePage({
     };
   }, [mode]);
 
+  // Downloads and "use this one" happen on the Models page; re-read when the mode changes.
+  useEffect(() => {
+    let current = true;
+    api
+      .listModels()
+      .then((data) => current && setModels(data.models))
+      .catch(() => undefined); // the header's health badge already reports an unreachable backend
+    return () => {
+      current = false;
+    };
+  }, [mode]);
+
   const pending = useMemo(
     () => generations.some((generation) => ACTIVE.includes(generation.status)),
     [generations],
   );
+
+  // A finished job leaves its model active (the Models page's choice follows what was
+  // used), so re-read the lists once the queue drains instead of showing stale flags.
+  const wasPending = useRef(false);
+  useEffect(() => {
+    if (wasPending.current && !pending) {
+      api.listModels().then((data) => setModels(data.models)).catch(() => undefined);
+      if (mode !== "speech") {
+        api.listAudioEngines().then(setEngines).catch(() => undefined);
+      }
+    }
+    wasPending.current = pending;
+  }, [pending, mode]);
 
   useEffect(() => {
     if (!pending) return;
@@ -121,10 +181,40 @@ export function GeneratePage({
     [],
   );
 
+  function startEdit(clip: Generation) {
+    if (clip.kind === "speech" || !clip.duration_seconds) return;
+    setSource({
+      id: clip.id,
+      kind: clip.kind,
+      text: clip.text,
+      seconds: clip.duration_seconds,
+    });
+    // The form is above the session list; bring it into view.
+    document.getElementById("generate-top")?.scrollIntoView({ behavior: "smooth" });
+  }
+
   const profile = profiles.find((item) => item.id === profileId);
   const engineStatus = health?.engines.find((item) => item.name === profile?.engine);
   const kitten = profile?.engine === "kitten";
 
+  // The models this voice's engine can run, and the one the form will use: the pick,
+  // else the engine's active model if it is ready, else the first ready one.
+  const voiceModels = useMemo(
+    () => models.filter((item) => item.category === "speech" && item.engine === profile?.engine),
+    [models, profile?.engine],
+  );
+  const pickedId = profile ? pickedModels[profile.engine] : undefined;
+  const voiceModel =
+    voiceModels.find((item) => item.id === pickedId) ??
+    voiceModels.find((item) => item.active && speechState(item) === "ready") ??
+    voiceModels.find((item) => speechState(item) === "ready") ??
+    voiceModels.find((item) => item.active) ??
+    voiceModels[0];
+  const modelState = voiceModel ? speechState(voiceModel) : "ready";
+  const modelTitles = useMemo(
+    () => new Map(models.map((item) => [item.id, item.title])),
+    [models],
+  );
   async function submit(event: React.FormEvent) {
     event.preventDefault();
     if (!profileId) return;
@@ -135,6 +225,7 @@ export function GeneratePage({
         text,
         speed: kitten ? 1 : speed,
         output_format: format,
+        ...(voiceModel ? { model_id: voiceModel.id } : {}),
         // Only KittenTTS 2 reads these; the backend ignores them elsewhere.
         ...(kitten ? { preset: style, ...(seed ? { seed: Number(seed) } : {}) } : {}),
       });
@@ -155,6 +246,7 @@ export function GeneratePage({
 
   return (
     <>
+      <div id="generate-top" />
       <PageHeader
         title="Generate"
         description={MODE_DESCRIPTION[mode]}
@@ -179,6 +271,8 @@ export function GeneratePage({
           onFormat={setFormat}
           onQueued={queued}
           onOpenModels={onOpenModels}
+          source={source?.kind === "music" ? source : null}
+          onClearSource={() => setSource(null)}
         />
       )}
 
@@ -190,39 +284,57 @@ export function GeneratePage({
           onFormat={setFormat}
           onQueued={queued}
           onOpenModels={onOpenModels}
+          source={source?.kind === "sfx" ? source : null}
+          onClearSource={() => setSource(null)}
         />
       )}
 
       <form onSubmit={submit} className={mode === "speech" ? "space-y-5" : "hidden"}>
-        <div className="grid gap-4 sm:grid-cols-[minmax(0,1fr)_7rem]">
-          <Field label="Voice">
-            <OptionSelect
-              value={profileId}
-              onChange={setProfileId}
-              disabled={profiles.length === 0}
-              placeholder="No profiles yet"
-              options={profiles.map((item) => ({
-                value: item.id,
-                label: `${item.name} — ${item.engine}${item.preset_voice ? ` (${item.preset_voice})` : ""}`,
-              }))}
-            />
-          </Field>
-          <Field label="Format">
-            <OptionSelect
-              value={format}
-              onChange={(value) => setFormat(value as AudioFormat)}
-              options={AUDIO_FORMATS.map((value) => ({
-                value,
-                label: value.toUpperCase(),
-              }))}
-            />
-          </Field>
-        </div>
+        <Field label="Voice">
+          <OptionSelect
+            value={profileId}
+            onChange={setProfileId}
+            disabled={profiles.length === 0}
+            placeholder="No profiles yet"
+            options={profiles.map((item) => ({
+              value: item.id,
+              label: `${item.name} — ${item.engine}${item.preset_voice ? ` (${item.preset_voice})` : ""}`,
+            }))}
+          />
+        </Field>
+
+        {voiceModels.length > 0 && (
+          <ModelPicker
+            options={voiceModels.map(
+              (item): ModelOption => ({
+                id: item.id,
+                title: item.title,
+                group: item.engine,
+                state: speechState(item),
+                note:
+                  speechState(item) === "download"
+                    ? `not downloaded · ${formatBytes(item.download_estimate_bytes)}`
+                    : undefined,
+              }),
+            )}
+            value={voiceModel?.id ?? ""}
+            onChange={(id) => profile && setPickedModels((c) => ({ ...c, [profile.engine]: id }))}
+            onOpenModels={onOpenModels}
+            detail={voiceModel && <SpeechDetail model={voiceModel} />}
+          />
+        )}
+
+        {voiceModel && modelState !== "ready" && (
+          <Notice tone="warn">
+            {voiceModel.title} {MODEL_STATE_NOTICE[modelState]} Open the Models page to fix that,
+            or pick another model above.
+          </Notice>
+        )}
 
         {engineStatus && !engineStatus.available && (
           <Notice tone="bad">
             {engineStatus.name} is not installed, so this generation will fail.
-            See backend/README.md for the install command.
+            Use “Re-run setup” in Settings to repair the install.
           </Notice>
         )}
         {profile?.engine === "qwen" && engineStatus?.device === "cpu" && (
@@ -277,7 +389,7 @@ export function GeneratePage({
           </div>
         )}
 
-        <div className="flex items-center gap-6">
+        <div className="flex items-end gap-6">
           {kitten ? (
             // KittenTTS 2 has no speed control; saying so beats a slider that does nothing.
             <p className="w-64 text-xs text-muted-foreground">
@@ -295,10 +407,23 @@ export function GeneratePage({
               />
             </Field>
           )}
-          <span className="ml-auto self-end pb-2 text-[13px] tabular-nums text-muted-foreground">
+          <span className="ml-auto pb-2 text-[13px] tabular-nums text-muted-foreground">
             {words} {words === 1 ? "word" : "words"}
           </span>
-          <Button type="submit" className="self-end" disabled={busy || !profileId || !text.trim()}>
+          <Field label="Format" className="w-28">
+            <OptionSelect
+              value={format}
+              onChange={(value) => setFormat(value as AudioFormat)}
+              options={AUDIO_FORMATS.map((value) => ({
+                value,
+                label: value.toUpperCase(),
+              }))}
+            />
+          </Field>
+          <Button
+            type="submit"
+            disabled={busy || !profileId || !text.trim() || modelState !== "ready"}
+          >
             {busy && <SpinnerIcon />}
             {busy ? "Queueing…" : "Generate"}
           </Button>
@@ -308,27 +433,65 @@ export function GeneratePage({
       <Separator className="my-8" />
 
       <SessionPanel
+        mode={mode}
         generations={generations}
         names={names}
+        modelTitles={modelTitles}
         exportFormat={preferences.default_output_format}
         onChanged={refresh}
+        onEdit={startEdit}
       />
     </>
   );
 }
 
+/** The `Generation.kind` each Generate mode produces. */
+const MODE_KIND: Record<Mode, Generation["kind"]> = {
+  speech: "speech",
+  music: "music",
+  sfx: "sfx",
+};
+
+const EMPTY_TEXT: Record<Mode, string> = {
+  speech: "Nothing generated yet — write a script, then press Generate.",
+  music: "No music yet — describe a style, then press Generate.",
+  sfx: "No sound effects yet — describe a sound, then press Generate.",
+};
+
+const EDIT_LABEL: Record<string, string> = {
+  variation: "Variation",
+  extend: "Extended",
+  replace: "Part replaced",
+};
+
+/** "Variation" / "Extended" / "Part replaced" for a clip made from another clip. */
+function editLabel(clip: Generation): string | undefined {
+  const mode = clip.params?.edit;
+  return typeof mode === "string" ? EDIT_LABEL[mode] : undefined;
+}
+
 function SessionPanel({
-  generations,
+  mode,
+  generations: all,
   names,
+  modelTitles,
   exportFormat,
   onChanged,
+  onEdit,
 }: {
+  /** Only the clips of this mode are listed. */
+  mode: Mode;
   generations: Generation[];
   names: Map<string, string>;
+  /** Catalog id → title, for the model each clip was made with. */
+  modelTitles: Map<string, string>;
   exportFormat: AudioFormat;
   onChanged: () => void | Promise<void>;
+  /** Start a new clip from this one (music and effects only). */
+  onEdit: (clip: Generation) => void;
 }) {
   const toast = useToast();
+  const generations = all.filter((g) => g.kind === MODE_KIND[mode]);
   const recent = generations.slice(0, 20);
   const running = recent.filter((g) => ACTIVE.includes(g.status));
   const rest = recent.filter((g) => !ACTIVE.includes(g.status));
@@ -371,7 +534,7 @@ function SessionPanel({
       }
     >
       {recent.length === 0 ? (
-        <Empty>Nothing generated yet — write a script or describe a sound, then press Generate.</Empty>
+        <Empty>{EMPTY_TEXT[mode]}</Empty>
       ) : (
         <div className="divide-y border-y">
           {running.map((g) => (
@@ -388,6 +551,8 @@ function SessionPanel({
             const done = g.status === "completed" && !!g.audio_path;
             // The voice's name belongs to speech; music and effects have none.
             const who = g.kind === "speech" && g.profile_id ? names.get(g.profile_id) : undefined;
+            const made = typeof g.params?.model === "string" ? g.params.model : undefined;
+            const model = made ? (modelTitles.get(made) ?? made) : undefined;
             return (
               <TrackRow
                 key={g.id}
@@ -398,7 +563,7 @@ function SessionPanel({
                         id: g.id,
                         path: g.audio_path!,
                         title: truncate(g.text, 90),
-                        subtitle: [who, formatWhen(g.created_at)]
+                        subtitle: [who, model, formatWhen(g.created_at)]
                           .filter(Boolean)
                           .join(" · "),
                       }
@@ -410,6 +575,8 @@ function SessionPanel({
                   ) : (
                     [
                       who,
+                      model,
+                      editLabel(g),
                       formatWhen(g.created_at),
                       g.duration_seconds != null && formatDuration(g.duration_seconds),
                       g.format?.toUpperCase(),
@@ -425,6 +592,11 @@ function SessionPanel({
                   <>
                     {done && (
                       <>
+                        {g.kind !== "speech" && (
+                          <IconButton label="Start a new clip from this one" onClick={() => onEdit(g)}>
+                            <WandIcon />
+                          </IconButton>
+                        )}
                         <IconButton label="Show file" onClick={() => reveal(g.audio_path)}>
                           <FolderIcon />
                         </IconButton>
@@ -451,5 +623,35 @@ function SessionPanel({
         </div>
       )}
     </Section>
+  );
+}
+
+/** What a speech model needs before it can run, judged from the Models list. */
+function speechState(model: Model): ModelState {
+  if (model.unavailable_reason) return "unsupported";
+  if (!model.engine_available) return "install";
+  return model.downloaded ? "ready" : "download";
+}
+
+const MODEL_STATE_NOTICE: Record<ModelState, string> = {
+  ready: "",
+  install: "needs its engine installed.",
+  download: "isn't downloaded yet, so this generation would be refused.",
+  unsupported: "can't run on this machine.",
+};
+
+function SpeechDetail({ model }: { model: Model }) {
+  return (
+    <>
+      <LicenseChip tier={model.license_tier} name={model.license_name} />
+      <Badge>{model.clones_voices ? "Clones voices" : "Preset voices"}</Badge>
+      {model.languages.length > 0 && (
+        <Badge>
+          {model.languages.length} language{model.languages.length === 1 ? "" : "s"}
+        </Badge>
+      )}
+      {model.needs_gpu && <Badge>GPU recommended</Badge>}
+      <span className="basis-full pt-0.5 leading-relaxed">{model.summary}</span>
+    </>
   );
 }

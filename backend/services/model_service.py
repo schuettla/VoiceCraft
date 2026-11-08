@@ -291,6 +291,21 @@ def _engine_available(engine: str) -> bool:
         return False
 
 
+def unavailable_reason(spec: ModelSpec) -> str | None:
+    """Why this machine can't run `spec`, or None when it can (or nothing is required)."""
+    if not spec.min_capability:
+        return None
+    from backends import device as devices  # noqa: PLC0415 - avoids an import cycle
+
+    try:
+        hardware = devices.hardware()
+    except Exception:  # noqa: BLE001 - a broken GPU probe must not break the page
+        return None
+    if hardware.cuda and hardware.capability and hardware.capability[0] >= spec.min_capability:
+        return None
+    return spec.requirement or "This model needs a newer GPU than this machine has."
+
+
 def describe(spec: ModelSpec) -> dict:
     """Everything the Models page shows for one catalog entry."""
     downloaded = spec_downloaded(spec)
@@ -320,6 +335,7 @@ def describe(spec: ModelSpec) -> dict:
         "license_name": spec.license_name or None,
         "license_url": spec.license_url or None,
         "gated": spec.gated,
+        "unavailable_reason": unavailable_reason(spec),
     }
 
 
@@ -367,6 +383,10 @@ def start_download(model_id: str) -> DownloadJob:
     spec = catalog.get(model_id)
     if spec is None:
         raise ModelError(f"unknown model: {model_id}")
+
+    reason = unavailable_reason(spec)
+    if reason:
+        raise ModelError(f"{spec.title} can't run on this machine. {reason}")
 
     # A gated repository refuses every request without a token, so say what to do
     # now instead of starting a job that fails with a 401 a moment later.
@@ -618,6 +638,9 @@ def select(model_id: str) -> None:
         raise ModelError(f"unknown model: {model_id}")
     if catalog.is_active(spec):
         return
+    reason = unavailable_reason(spec)
+    if reason:
+        raise ModelError(f"{spec.title} can't run on this machine. {reason}")
 
     # Stored by model id: two entries can share a repo, so the repo id alone
     # wouldn't say which one was chosen. The pre-id settings key is dropped so
@@ -651,6 +674,18 @@ def _forget_staged(engine: str) -> None:
 
 
 def _unload_engine(engine: str) -> None:
+    """Drop an engine's weights, without pulling them from under a running job.
+
+    Called from a request (the Models page picks or deletes a model) it is queued
+    on the job worker, so it runs after the job in progress; the worker itself
+    (switching models at the start of a job) unloads at once.
+    """
+    from services import generation_service  # noqa: PLC0415 - avoids an import cycle
+
+    generation_service.run_on_worker(_unload_now, engine)
+
+
+def _unload_now(engine: str) -> None:
     from backends import get_backend  # noqa: PLC0415 - avoids an import cycle
 
     try:

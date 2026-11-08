@@ -380,6 +380,24 @@ def main() -> int:
             client.get("/api/settings").json()["preferences"]["default_output_format"]
             == "flac",
         )
+        generate_defaults = {
+            "default_music_seconds": 90, "default_music_vocals": "vocals",
+            "default_sfx_seconds": 1.5, "default_sfx_takes": 3,
+            "default_kitten_style": "expressive", "idle_unload_minutes": 0,
+        }
+        saved_prefs = client.put(
+            "/api/settings/preferences", json={**settings["preferences"], **generate_defaults}
+        ).json()["preferences"]
+        check("the Generate defaults are saved and read back",
+              all(saved_prefs[key] == value for key, value in generate_defaults.items()), str(saved_prefs))
+        check("an old settings file without them gets the defaults",
+              settings["preferences"]["default_music_seconds"] == 30
+              and settings["preferences"]["default_sfx_takes"] == 1
+              and settings["preferences"]["idle_unload_minutes"] == 10, str(settings["preferences"]))
+        for bad in ({"default_music_seconds": 5}, {"default_sfx_takes": 9},
+                    {"default_music_vocals": "choir"}, {"idle_unload_minutes": -1}):
+            check(f"{next(iter(bad))} out of range is rejected",
+                  client.put("/api/settings/preferences", json={**settings["preferences"], **bad}).status_code == 422)
         # The generation and its edits are all still referenced, so a cleanup
         # run must leave them alone (it is a space reclaim, not a delete).
         before = sum(1 for _ in config.EDITS_DIR.iterdir())

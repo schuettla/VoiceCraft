@@ -304,7 +304,10 @@ function ModelRow({
             <span className="flex items-center gap-2">
               <span className="truncate text-sm font-medium text-foreground">{model.title}</span>
               {model.active && <Badge tone="good">in use</Badge>}
-              {!model.engine_available && <Badge tone="warn">engine missing</Badge>}
+              {model.unavailable_reason && <Badge tone="warn">needs a newer GPU</Badge>}
+              {!model.engine_available && !model.unavailable_reason && (
+                <Badge tone="warn">engine missing</Badge>
+              )}
               <LicenseBadge model={model} />
             </span>
             <span className="mt-0.5 block truncate text-xs text-muted-foreground">
@@ -366,6 +369,10 @@ function ModelRow({
 
             <LicenseLine model={model} />
 
+            {model.unavailable_reason && (
+              <Notice tone="info">{model.unavailable_reason}</Notice>
+            )}
+
             {model.shared_with.length > 0 && (
               <p className="text-xs text-muted-foreground">
                 This entry shares its files with another one, so deleting either removes both.
@@ -402,7 +409,7 @@ function ModelRow({
               ) : model.downloaded ? (
                 <>
                   {!model.active && (
-                    <Button size="sm" disabled={busy} onClick={onSelect}>
+                    <Button size="sm" disabled={busy || !!model.unavailable_reason} onClick={onSelect}>
                       Use this model
                     </Button>
                   )}
@@ -418,10 +425,14 @@ function ModelRow({
                 </>
               ) : (
                 <>
-                  <Button size="sm" disabled={busy || needsToken} onClick={onDownload}>
+                  <Button
+                    size="sm"
+                    disabled={busy || needsToken || !!model.unavailable_reason}
+                    onClick={onDownload}
+                  >
                     Download
                   </Button>
-                  {needsToken && (
+                  {needsToken && !model.unavailable_reason && (
                     <span className="text-xs text-warning">
                       Add your Hugging Face token under “Hugging Face access” first.
                     </span>
@@ -434,7 +445,7 @@ function ModelRow({
                   Generations with the {model.engine} engine use this checkpoint.
                 </span>
               )}
-              {!model.engine_available && (
+              {!model.engine_available && !model.unavailable_reason && (
                 <span className="text-xs text-warning">
                   {model.optional_engine
                     ? `The ${model.engine} engine is not installed — install it in the panel above this list.`

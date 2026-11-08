@@ -1,12 +1,15 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { api } from "../lib/api";
 import type { AudioEngine, AudioFormat, Generation } from "../lib/types";
-import { AUDIO_FORMATS, formatDuration, formatMinutes } from "../lib/format";
-import { chooseEngine, ignoresGuidance, readyEngines } from "../lib/engines";
+import { AUDIO_FORMATS, formatDuration } from "../lib/format";
+import { chooseEngine, ignoresGuidance, modelViews, type ModelView } from "../lib/engines";
+import { usePreferences } from "../lib/preferences";
 import { useRemembered } from "../lib/remember";
+import { ClipEditPanel, EDIT_BUTTON, useClipEdit, type ClipSource } from "./ClipEdit";
+import { AudioModelPicker } from "./AudioModelPicker";
 import { EngineGate } from "./EngineGate";
 import { useToast } from "./Toaster";
-import { Field, Notice, OptionSelect, Segmented } from "./common";
+import { Field, OptionSelect, Segmented } from "./common";
 import { SpinnerIcon } from "./icons";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -22,23 +25,12 @@ const EXAMPLES = [
 
 // The limits the backend enforces (models.py): the engine's documented ranges.
 const MIN_SECONDS = 10;
-const DEFAULT_SECONDS = 30;
 const ENGINE_MAX_SECONDS = 600;
 const STYLE_MAX_CHARS = 512;
 const LYRICS_MAX_CHARS = 4096;
 const MAX_SEED = 2 ** 31 - 1;
 
-/**
- * What the one measured card did (GTX 1060 6 GB, Phase 0, turbo, 8 steps,
- * instrumental, no language model): about a minute to load the model, and 71 s
- * for a 30 s clip. Scaled linearly with length and steps, and shown only when
- * the engine reports an offloaded card, for the turbo model, so it is never a
- * guess about hardware or a model that wasn't measured.
- */
-const MEASURED_LOAD_SECONDS = 60;
-const MEASURED_SECONDS_PER_30S_AT_8_STEPS = 71;
-const MEASURED_MODEL = "acestep-1.5-turbo";
-const MEASURED_STEPS = 8;
+const FALLBACK_STEPS = 8;
 
 type Vocals = "instrumental" | "vocals";
 
@@ -54,6 +46,8 @@ export function MusicForm({
   onFormat,
   onQueued,
   onOpenModels,
+  source = null,
+  onClearSource,
 }: {
   /** Every music engine the backend knows, default first (null while loading). */
   engines: AudioEngine[] | null;
@@ -62,49 +56,64 @@ export function MusicForm({
   onFormat: (next: AudioFormat) => void;
   onQueued: (rows: Generation[]) => void;
   onOpenModels: () => void;
+  /** A finished clip to start from (variation / extend / replace a part). */
+  source?: ClipSource | null;
+  onClearSource: () => void;
 }) {
-  // The last engine the user picked; used only while it is still ready.
-  const [remembered, setRemembered] = useRemembered<string>("voicecraft.generate.engine.music", "");
-  const { engine, passedOver } = chooseEngine(engines ?? [], remembered);
-  const choices = readyEngines(engines ?? []);
+  // The last model the user picked; used only while it is still ready.
+  const [remembered, setRemembered] = useRemembered<string>("voicecraft.generate.model.music", "");
+  // What was picked in the list this visit, even if it still needs a download.
+  const [picked, setPicked] = useState("");
+  const views = useMemo(() => modelViews(engines ?? []), [engines]);
+  // Starting from a clip is something only some engines can do, so only they are offered.
+  const editors = views.filter((item) => item.editing);
+  const pool = source && editors.length ? editors : views;
+  const { engine, passedOver } = chooseEngine(pool, remembered, picked);
+  const pick = (id: string) => {
+    setPicked(id);
+    setRemembered(id);
+  };
   return (
+    <div className="space-y-5">
+    <AudioModelPicker models={pool} chosen={engine} onPick={pick} onOpenModels={onOpenModels} />
     <EngineGate
       engine={engine}
       passedOver={passedOver}
       loading={loading}
       subject="Music generation"
       noun="music"
+      lead={source && engine ? `Starting from a clip needs ${engine.label}.` : null}
       onOpenModels={onOpenModels}
     >
       {(ready) => (
         <Form
           engine={ready}
-          choices={choices}
-          onEngine={setRemembered}
           format={format}
           onFormat={onFormat}
           onQueued={onQueued}
+          source={source}
+          onClearSource={onClearSource}
         />
       )}
     </EngineGate>
+    </div>
   );
 }
 
 function Form({
   engine,
-  choices,
-  onEngine,
   format,
   onFormat,
   onQueued,
+  source,
+  onClearSource,
 }: {
-  engine: AudioEngine;
-  /** Engines that would run right now; a selector shows when there are two or more. */
-  choices: AudioEngine[];
-  onEngine: (name: string) => void;
+  engine: ModelView;
   format: AudioFormat;
   onFormat: (next: AudioFormat) => void;
   onQueued: (rows: Generation[]) => void;
+  source: ClipSource | null;
+  onClearSource: () => void;
 }) {
   const toast = useToast();
   const limit = Math.max(
@@ -112,33 +121,35 @@ function Form({
     Math.min(ENGINE_MAX_SECONDS, engine.max_duration_seconds ?? ENGINE_MAX_SECONDS),
   );
   const [style, setStyle] = useState("");
-  const [wantedVocals, setVocals] = useState<Vocals>("instrumental");
+  // Untouched, these follow the Settings defaults (which may still be loading).
+  const preferences = usePreferences();
+  const [chosenVocals, setVocals] = useState<Vocals | null>(null);
   const [lyrics, setLyrics] = useState("");
-  const [wantedSeconds, setSeconds] = useState(DEFAULT_SECONDS);
+  const [wantedSeconds, setSeconds] = useState<number | null>(null);
   const [seed, setSeed] = useState("");
   const [steps, setSteps] = useState("");
   const [guidance, setGuidance] = useState("");
   const [busy, setBusy] = useState(false);
 
+  // Starting from a clip: its own description is the best first guess for the new one.
+  const edit = useClipEdit(source, limit);
+  const editing = source ? edit.built : null;
+  const sourceId = source?.id;
+  const sourceText = source?.text;
+  useEffect(() => {
+    if (sourceText) setStyle(sourceText.slice(0, STYLE_MAX_CHARS));
+  }, [sourceId, sourceText]);
+
   // A different engine can have a shorter limit or no vocals; what was asked for
   // is kept, and what is used follows the engine on screen.
-  const seconds = Math.min(wantedSeconds, limit);
-  const vocals: Vocals = engine.lyrics ? wantedVocals : "instrumental";
+  const seconds = Math.min(wantedSeconds ?? preferences.default_music_seconds, limit);
+  const vocals: Vocals = engine.lyrics && !source ? (chosenVocals ?? preferences.default_music_vocals) : "instrumental";
 
   const guidanceIgnored = ignoresGuidance(engine);
-  const defaultSteps = engine.default_steps ?? MEASURED_STEPS;
-
-  const estimate = useMemo(() => {
-    if (!engine.warning || engine.model_id !== MEASURED_MODEL) return null;
-    const render =
-      MEASURED_SECONDS_PER_30S_AT_8_STEPS *
-      (seconds / 30) *
-      ((Number(steps) || defaultSteps) / MEASURED_STEPS);
-    return MEASURED_LOAD_SECONDS + render;
-  }, [engine.warning, engine.model_id, seconds, steps, defaultSteps]);
+  const defaultSteps = engine.default_steps ?? FALLBACK_STEPS;
 
   const needsLyrics = vocals === "vocals" && !lyrics.trim();
-  const ready = !!style.trim() && !needsLyrics;
+  const ready = !!style.trim() && !needsLyrics && !editing?.problem;
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
@@ -148,13 +159,16 @@ function Form({
       const rows = await api.generateAudio({
         kind: "music",
         engine: engine.name,
+        ...(engine.model_id ? { model_id: engine.model_id } : {}),
         prompt: style,
-        duration_seconds: seconds,
+        duration_seconds: editing ? editing.duration : seconds,
         output_format: format,
+        ...(editing ? { edit: editing.edit } : {}),
         ...(vocals === "vocals" ? { lyrics } : {}),
         ...(seed ? { seed: Math.min(Number(seed), MAX_SEED) } : {}),
         ...(steps ? { steps: Math.min(Math.max(Number(steps), 1), 200) } : {}),
-        ...(guidance ? { guidance: Math.min(Number(guidance), 50) } : {}),
+        // A value typed for another model stays in the (disabled) box; don't send it.
+        ...(guidance && !guidanceIgnored ? { guidance: Math.min(Number(guidance), 50) } : {}),
       });
       onQueued(rows);
       toast("Generation queued", "success");
@@ -167,16 +181,8 @@ function Form({
 
   return (
     <form onSubmit={submit} className="space-y-5">
-      {engine.warning && <Notice tone="warn">{engine.warning}</Notice>}
-
-      {choices.length > 1 && (
-        <Field label="Engine">
-          <OptionSelect
-            value={engine.name}
-            onChange={onEngine}
-            options={choices.map((choice) => ({ value: choice.name, label: choice.label }))}
-          />
-        </Field>
+      {source && (
+        <ClipEditPanel source={source} edit={edit} limit={limit} onClear={onClearSource} />
       )}
 
       <Field
@@ -207,7 +213,7 @@ function Form({
         </div>
       </Field>
 
-      {engine.lyrics ? (
+      {source ? null : engine.lyrics ? (
         <Field label="Vocals">
           <Segmented<Vocals>
             value={vocals}
@@ -221,7 +227,7 @@ function Form({
         </Field>
       ) : (
         <p className="text-xs text-muted-foreground">
-          {engine.label} makes instrumentals only. Pick another engine for vocals.
+          {engine.label} makes instrumentals only. Pick another model for vocals.
         </p>
       )}
 
@@ -246,15 +252,8 @@ function Form({
         </Field>
       )}
 
-      <div className="grid gap-4 sm:grid-cols-[minmax(0,1fr)_7rem]">
-        <Field
-          label={`Length — ${formatDuration(seconds)}`}
-          hint={
-            engine.max_duration_seconds && engine.max_duration_seconds < ENGINE_MAX_SECONDS
-              ? `Up to ${formatDuration(engine.max_duration_seconds)} on this GPU.`
-              : undefined
-          }
-        >
+      {!source && (
+        <Field label={`Length — ${formatDuration(seconds)}`}>
           <Slider
             min={MIN_SECONDS}
             max={limit}
@@ -264,14 +263,7 @@ function Form({
             className="py-2"
           />
         </Field>
-        <Field label="Format">
-          <OptionSelect
-            value={format}
-            onChange={(value) => onFormat(value as AudioFormat)}
-            options={AUDIO_FORMATS.map((value) => ({ value, label: value.toUpperCase() }))}
-          />
-        </Field>
-      </div>
+      )}
 
       <details className="group rounded-md border px-3 py-2">
         <summary className="cursor-pointer text-[13px] text-muted-foreground select-none group-open:mb-3">
@@ -309,19 +301,17 @@ function Form({
         </div>
       </details>
 
-      <div className="flex items-center gap-4">
-        <div className="space-y-0.5 text-xs text-muted-foreground">
-          {estimate && (
-            <p>
-              Roughly {formatMinutes(estimate)} including loading the model, on a 6 GB GPU
-              (measured on a GTX 1060, instrumental).
-            </p>
-          )}
-          {engine.model_title && <p>Model: {engine.model_title}. Change it on the Models page.</p>}
-        </div>
-        <Button type="submit" className="ml-auto" disabled={busy || !ready}>
+      <div className="flex items-end gap-3">
+        <Field label="Format" className="ml-auto w-28">
+          <OptionSelect
+            value={format}
+            onChange={(value) => onFormat(value as AudioFormat)}
+            options={AUDIO_FORMATS.map((value) => ({ value, label: value.toUpperCase() }))}
+          />
+        </Field>
+        <Button type="submit" disabled={busy || !ready}>
           {busy && <SpinnerIcon />}
-          {busy ? "Queueing…" : "Generate"}
+          {busy ? "Queueing…" : source ? EDIT_BUTTON[edit.state.mode] : "Generate"}
         </Button>
       </div>
     </form>
