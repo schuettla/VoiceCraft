@@ -29,19 +29,41 @@ backend/     FastAPI + SQLite + ffmpeg  (see backend/README.md)
   model's licence shown before you download it.
 - Output as **WAV, MP3, OGG or FLAC**.
 
+## Download
+
+[![Latest release](https://img.shields.io/github/v/release/schuettla/VoiceCraft?label=latest%20release)](https://github.com/schuettla/VoiceCraft/releases/latest)
+
+**[Download the latest version](https://github.com/schuettla/VoiceCraft/releases/latest)**
+(always the newest release; pick the file for your system under **Assets**).
+
+| System | Download | Notes |
+|---|---|---|
+| **Windows 10/11 (64-bit)** | `VoiceCraft_<version>_x64-setup.exe` | Installer. |
+| | `VoiceCraft_v<version>_x64-portable.exe` | Single file, no install. Just run it. |
+| **macOS (Apple Silicon)** | `VoiceCraft_<version>_aarch64.dmg` | Intel Macs are not supported. |
+| **Linux (x86_64)** | `VoiceCraft_<version>_amd64.AppImage` | |
+
+Not sure which one? Windows: the `setup.exe`. Mac: the `.dmg`. Linux: the
+`.AppImage`. Ignore the `.app.tar.gz` file; it is only an internal build artifact.
+
+**Staying up to date.** VoiceCraft checks GitHub for a newer release when it
+starts (at most once a day) and shows a notice with a **Download** button. It
+never downloads or installs anything by itself. You can turn the check off or run
+it by hand under **Settings → Updates**. To update, download the newest file from
+the link above and install it over the old one; your voices, library and models
+are kept.
+
 ## Install and run
 
-Download the installer for your OS from the [Releases](../../releases) page.
+The apps are unsigned, so your OS warns once on first launch:
 
-- **Windows**: run the `.exe`. It's unsigned, so SmartScreen will warn once.
-  Click **More info → Run anyway**.
+- **Windows**: SmartScreen shows a warning. Click **More info → Run anyway**.
 - **Linux (AppImage)**: `chmod +x VoiceCraft_*.AppImage`, then run it. On
   Ubuntu 22.04+ you may need `sudo apt install libfuse2` first.
-- **macOS (Apple Silicon only)**: open the `.dmg` and drag VoiceCraft into
-  Applications. The app isn't notarized, so Gatekeeper blocks the first launch.
-  On macOS 15+, right-click → Open no longer works. Go to **System Settings →
-  Privacy & Security → "Open Anyway"** instead, or run
-  `xattr -cr /Applications/VoiceCraft.app` in Terminal.
+- **macOS**: open the `.dmg` and drag VoiceCraft into Applications. The app isn't
+  notarized, so Gatekeeper blocks the first launch. On macOS 15+, right-click →
+  Open no longer works. Go to **System Settings → Privacy & Security → "Open
+  Anyway"** instead, or run `xattr -cr /Applications/VoiceCraft.app` in Terminal.
 
 You don't need to install Python, open a terminal or have admin rights. On first
 launch the app shows a setup screen that:
@@ -237,6 +259,8 @@ The **Settings** page has:
 - **Storage**: the ffmpeg binaries in use, and the data folder broken down by
   kind with **Reclaim space**, which deletes scratch files and orphans, never
   anything the app still lists.
+- **Updates**: the version you run, a **Check now** button, and a switch for the
+  check at startup.
 - **About**: credits for the model authors, with links to their licences.
 
 The backend listens on **127.0.0.1:17610**. `VOICECRAFT_PORT` overrides it
