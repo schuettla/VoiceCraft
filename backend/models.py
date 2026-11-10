@@ -763,6 +763,11 @@ class Preferences(BaseModel):
     default_language: str = Field(default="en", max_length=16)
     default_output_format: AudioFormat = "mp3"
     default_crossfade_ms: int = Field(default=0, ge=0, le=config.MAX_CROSSFADE_MS)
+    # Encoder quality for the compressed formats. WAV and FLAC are lossless and
+    # have nothing to tune. MP3 is constant bitrate (kbps); OGG is Vorbis VBR
+    # quality, 0 (smallest) to 10 (best).
+    mp3_bitrate_kbps: int = Field(default=192, ge=64, le=320)
+    ogg_quality: int = Field(default=5, ge=0, le=10)
     # Where the Generate forms start (Phase 11). Each is only a starting value:
     # the form can change it per job, and the engine's own limit still applies
     # (a default of 5 minutes is clamped to what the chosen model makes here).

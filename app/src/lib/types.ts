@@ -242,6 +242,10 @@ export interface Preferences {
   default_language: string;
   default_output_format: AudioFormat;
   default_crossfade_ms: number;
+  /** MP3 constant bitrate in kbps (64-320). WAV and FLAC are lossless. */
+  mp3_bitrate_kbps: number;
+  /** OGG Vorbis quality, 0 (smallest) to 10 (best). */
+  ogg_quality: number;
   /** Where the Generate forms start; each form can change it per job. */
   default_music_seconds: number;
   default_music_vocals: "instrumental" | "vocals";

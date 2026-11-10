@@ -16,6 +16,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # The in-app update check compares the release tag with the version baked
+      # into the app, so a tag that disagrees with tauri.conf.json would announce
+      # a wrong (or never-ending) update. Fail fast instead.
+      - name: Tag must match the app version
+        shell: bash
+        run: |
+          app_version=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          if [ "v${app_version}" != "${GITHUB_REF_NAME}" ]; then
+            echo "::error::Tag ${GITHUB_REF_NAME} does not match tauri.conf.json version ${app_version}. Bump the version (tauri.conf.json, src-tauri/Cargo.toml) before tagging."
+            exit 1
+          fi
+
       - name: Linux build dependencies
         if: matrix.platform == 'ubuntu-22.04'
         run: |
@@ -37,6 +49,7 @@ jobs:
       - run: npm ci --prefix app
 
       - uses: tauri-apps/tauri-action@v0
+        id: tauri
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
@@ -44,3 +57,19 @@ jobs:
           releaseName: "VoiceCraft ${{ github.ref_name }}"
           releaseBody: "See README for install steps per platform."
           releaseDraft: true
+
+      # Portable Windows build: the bare exe. It embeds the frontend and the Python
+      # backend (extracted to %LOCALAPPDATA%\VoiceCraft on launch); the managed
+      # runtime and models download there on first run. No zip, no installer.
+      - name: Upload portable exe to the draft release (Windows)
+        if: matrix.platform == 'windows-latest'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_ID: ${{ steps.tauri.outputs.releaseId }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          gh api --method POST \
+            -H "Content-Type: application/vnd.microsoft.portable-executable" \
+            --input src-tauri/target/release/voicecraft.exe \
+            "https://uploads.github.com/repos/${{ github.repository }}/releases/${RELEASE_ID}/assets?name=VoiceCraft_${TAG}_x64-portable.exe"

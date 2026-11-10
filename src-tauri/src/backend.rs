@@ -130,7 +130,61 @@ fn spawn_python(app: &AppHandle, args: &[String]) -> Result<Spawned, String> {
         .map_err(|e| e.to_string())
 }
 
-/// Bundled resources first, then a source checkout.
+/// The Python backend baked into the exe, so a lone `VoiceCraft.exe` (the
+/// portable build) needs no `backend/` folder beside it. In debug builds
+/// rust-embed reads straight from disk, so dev never goes through this.
+#[derive(rust_embed::Embed)]
+#[folder = "../backend/"]
+#[exclude = "**/__pycache__/**"]
+#[exclude = "**/*.pyc"]
+#[exclude = "tests/**"]
+struct EmbeddedBackend;
+
+/// Unpacks the embedded backend into the data dir and returns its `main.py`.
+/// Files are only rewritten when they differ, and files from older versions
+/// that no longer exist are removed, so upgrading the exe upgrades the backend.
+fn extract_embedded_backend() -> Option<PathBuf> {
+    use std::collections::HashSet;
+
+    let root = setup::data_dir().join("app").join("backend");
+    let mut keep: HashSet<PathBuf> = HashSet::new();
+
+    for name in EmbeddedBackend::iter() {
+        let file = EmbeddedBackend::get(&name)?;
+        let dest = root.join(name.as_ref());
+        keep.insert(dest.clone());
+        if std::fs::read(&dest).map(|b| b == file.data.as_ref()).unwrap_or(false) {
+            continue;
+        }
+        if let Some(parent) = dest.parent() {
+            std::fs::create_dir_all(parent).ok()?;
+        }
+        std::fs::write(&dest, file.data.as_ref()).ok()?;
+    }
+
+    fn prune(dir: &Path, keep: &HashSet<PathBuf>) {
+        let Ok(entries) = std::fs::read_dir(dir) else { return };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                // Python writes its bytecode cache here; leave it alone.
+                if path.file_name().is_some_and(|n| n == "__pycache__") {
+                    continue;
+                }
+                prune(&path, keep);
+            } else if !keep.contains(&path) {
+                let _ = std::fs::remove_file(&path);
+            }
+        }
+    }
+    prune(&root, &keep);
+
+    let script = root.join("main.py");
+    script.is_file().then_some(script)
+}
+
+/// Bundled resources first, then a source checkout, then the copy embedded in
+/// the exe (portable build).
 fn find_backend_script(app: &AppHandle) -> Option<PathBuf> {
     if let Ok(resources) = app.path().resource_dir() {
         let bundled = resources.join("backend").join("main.py");
@@ -150,6 +204,7 @@ fn find_backend_script(app: &AppHandle) -> Option<PathBuf> {
         .into_iter()
         .map(|root| root.join("backend").join("main.py"))
         .find(|candidate| candidate.is_file())
+        .or_else(extract_embedded_backend)
 }
 
 /// The managed runtime wins; a checkout's `.venv` is the developer fallback.

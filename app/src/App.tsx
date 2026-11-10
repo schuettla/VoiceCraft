@@ -5,6 +5,7 @@ import { isTauri, setupApi } from "./lib/tauri";
 import { cn } from "@/lib/utils";
 import { ToastProvider } from "./components/Toaster";
 import { EngineStatus } from "./components/EngineStatus";
+import { UpdateNotifier } from "./components/UpdateNotifier";
 import { ConfirmProvider } from "./components/Confirm";
 import { AudioProvider, PlayerDock } from "./components/AudioPlayer";
 import { AppSidebar, VIEW_LABEL, type View } from "./components/AppSidebar";
@@ -23,7 +24,7 @@ type Phase = "booting" | "setup" | "ready";
 
 export default function App() {
   const [phase, setPhase] = useState<Phase>("booting");
-  const [view, setView] = useState<View>("profiles");
+  const [view, setView] = useState<View>("generate");
   const [health, setHealth] = useState<Health | null>(null);
   const [reachable, setReachable] = useState<boolean | null>(null);
   // Set by the Library ("edit this clip", "use this script"); Generate takes it.
@@ -116,6 +117,7 @@ export default function App() {
     <TooltipProvider delayDuration={200}>
       <ToastProvider>
         <ConfirmProvider>
+        <UpdateNotifier />
         <AudioProvider>
           <SidebarProvider
             className="h-full min-h-0"

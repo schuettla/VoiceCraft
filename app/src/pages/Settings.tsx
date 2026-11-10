@@ -5,7 +5,14 @@ import { formatBytes, formatDuration } from "../lib/format";
 import { setCachedPreferences } from "../lib/preferences";
 import { useToast } from "../components/Toaster";
 import { useConfirm } from "../components/Confirm";
-import { isTauri } from "../lib/tauri";
+import { isTauri, openExternal } from "../lib/tauri";
+import {
+  autoCheckEnabled,
+  checkForUpdate,
+  markChecked,
+  setAutoCheckEnabled,
+  type UpdateInfo,
+} from "../lib/updates";
 import { ATTRIBUTIONS } from "../lib/attributions";
 import { ExternalLink } from "../components/ExternalLink";
 import {
@@ -20,6 +27,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { Slider } from "@/components/ui/slider";
+import { Switch } from "@/components/ui/switch";
 
 /** Idle times offered for unloading models; a value saved some other way is added to the list. */
 const IDLE_MINUTES = [0, 2, 5, 10, 30, 60, 120];
@@ -57,6 +65,17 @@ const LANGUAGES = [
 ] as const;
 
 const FORMATS: AudioFormat[] = ["wav", "mp3", "ogg", "flac"];
+const MP3_BITRATES = [96, 128, 160, 192, 256, 320];
+const OGG_QUALITIES: { value: number; label: string }[] = [
+  { value: 3, label: "3 — about 112 kbps" },
+  { value: 4, label: "4 — about 128 kbps" },
+  { value: 5, label: "5 — about 160 kbps (default)" },
+  { value: 6, label: "6 — about 192 kbps" },
+  { value: 7, label: "7 — about 224 kbps" },
+  { value: 8, label: "8 — about 256 kbps" },
+  { value: 9, label: "9 — about 320 kbps" },
+  { value: 10, label: "10 — about 500 kbps, best" },
+];
 
 export function SettingsPage({ onRunSetup }: { onRunSetup: () => void }) {
   const toast = useToast();
@@ -64,6 +83,21 @@ export function SettingsPage({ onRunSetup }: { onRunSetup: () => void }) {
   const [settings, setSettings] = useState<Settings | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  const [autoUpdates, setAutoUpdates] = useState(autoCheckEnabled);
+  const [update, setUpdate] = useState<UpdateInfo | null>(null);
+
+  async function checkUpdates() {
+    setBusy("update");
+    try {
+      const info = await checkForUpdate();
+      markChecked();
+      setUpdate(info);
+    } catch (caught) {
+      toast((caught as Error).message, "error");
+    } finally {
+      setBusy(null);
+    }
+  }
 
   const refresh = useCallback(async () => {
     try {
@@ -263,6 +297,36 @@ export function SettingsPage({ onRunSetup }: { onRunSetup: () => void }) {
               />
             </SettingRow>
             <SettingRow
+              label="MP3 quality"
+              description="Bitrate for every MP3 made or exported. Higher sounds better and makes bigger files. Applies from the next export."
+            >
+              <OptionSelect
+                className="w-64"
+                value={String(preferences.mp3_bitrate_kbps)}
+                onChange={(value) => void savePreference({ mp3_bitrate_kbps: Number(value) })}
+                options={[...new Set([...MP3_BITRATES, preferences.mp3_bitrate_kbps])]
+                  .sort((a, b) => a - b)
+                  .map((kbps) => ({
+                    value: String(kbps),
+                    label: `${kbps} kbps${kbps === 192 ? " (default)" : kbps === 320 ? " — best" : ""}`,
+                  }))}
+              />
+            </SettingRow>
+            <SettingRow
+              label="OGG quality"
+              description="Vorbis quality level for every OGG made or exported. WAV and FLAC are lossless, so they have nothing to set."
+            >
+              <OptionSelect
+                className="w-64"
+                value={String(preferences.ogg_quality)}
+                onChange={(value) => void savePreference({ ogg_quality: Number(value) })}
+                options={OGG_QUALITIES.map(({ value, label }) => ({
+                  value: String(value),
+                  label,
+                }))}
+              />
+            </SettingRow>
+            <SettingRow
               label="Crossfade"
               description="Applied between segments when assembling an episode."
             >
@@ -422,6 +486,65 @@ export function SettingsPage({ onRunSetup }: { onRunSetup: () => void }) {
           </p>
         </Section>
 
+        {isTauri() && (
+          <>
+            <Separator />
+
+            <Section
+              title="Updates"
+              description="VoiceCraft only tells you when a new version is out; you download and install it yourself."
+            >
+              <div>
+                <SettingRow
+                  label="Check for updates"
+                  description={
+                    update
+                      ? update.newer
+                        ? `Version ${update.latest} is available — you have ${update.current}.`
+                        : `You're up to date (${update.current}).`
+                      : "Looks at VoiceCraft's GitHub releases page."
+                  }
+                >
+                  <div className="flex items-center gap-2">
+                    {update?.newer && (
+                      <Button
+                        size="sm"
+                        onClick={() =>
+                          openExternal(update.url).catch((error: Error) =>
+                            toast(error.message, "error"),
+                          )
+                        }
+                      >
+                        Download {update.latest}
+                      </Button>
+                    )}
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={busy === "update"}
+                      onClick={() => void checkUpdates()}
+                    >
+                      {busy === "update" ? "Checking…" : "Check now"}
+                    </Button>
+                  </div>
+                </SettingRow>
+                <SettingRow
+                  label="Check on startup"
+                  description="At most once a day. Sends a request to GitHub; nothing about you or your projects."
+                >
+                  <Switch
+                    checked={autoUpdates}
+                    onCheckedChange={(next) => {
+                      setAutoUpdates(next);
+                      setAutoCheckEnabled(next);
+                    }}
+                  />
+                </SettingRow>
+              </div>
+            </Section>
+          </>
+        )}
+
         <Separator />
 
         <Section
@@ -458,7 +581,8 @@ export function SettingsPage({ onRunSetup }: { onRunSetup: () => void }) {
 
         <p className="pb-2 text-xs text-muted-foreground">
           VoiceCraft keeps everything on this machine. The only network traffic is
-          model downloads, which you start yourself on the Models page.
+          model downloads, which you start yourself on the Models page, and the
+          optional update check above.
         </p>
       </div>
     </>

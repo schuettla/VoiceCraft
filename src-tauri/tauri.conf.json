@@ -22,7 +22,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; connect-src 'self' http://127.0.0.1:17610; media-src 'self' http://127.0.0.1:17610 blob:; img-src 'self' data:; style-src 'self' 'unsafe-inline'"
+      "csp": "default-src 'self'; connect-src 'self' http://127.0.0.1:17610 https://api.github.com; media-src 'self' http://127.0.0.1:17610 blob:; img-src 'self' data:; style-src 'self' 'unsafe-inline'"
     }
   },
   "bundle": {

@@ -25,10 +25,13 @@ log = logging.getLogger(__name__)
 # Windows: keep console windows from flashing when we spawn ffmpeg.
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
+DEFAULT_MP3_BITRATE_KBPS = 192
+DEFAULT_OGG_QUALITY = 5
+
 _ENCODERS: dict[str, list[str]] = {
     "wav": ["-c:a", "pcm_s16le"],
-    "mp3": ["-c:a", "libmp3lame", "-b:a", "192k"],
-    "ogg": ["-c:a", "libvorbis", "-q:a", "5"],
+    "mp3": ["-c:a", "libmp3lame", "-b:a", f"{DEFAULT_MP3_BITRATE_KBPS}k"],
+    "ogg": ["-c:a", "libvorbis", "-q:a", str(DEFAULT_OGG_QUALITY)],
     "flac": ["-c:a", "flac"],
 }
 
@@ -37,11 +40,31 @@ class AudioError(RuntimeError):
     """An ffmpeg/ffprobe invocation failed, with stderr attached."""
 
 
+def _quality_preference(key: str, default: int, low: int, high: int) -> int:
+    """A quality preference from Settings, clamped; the default if unset or junk.
+
+    Read on every encode (settings are cached in memory) so a change in Settings
+    applies to the next export without a restart.
+    """
+    try:
+        value = int((config.load_settings().get("preferences") or {}).get(key, default))
+    except (TypeError, ValueError):
+        return default
+    return min(max(value, low), high)
+
+
 def encoder_args(fmt: str) -> list[str]:
     try:
-        return list(_ENCODERS[fmt])
+        args = list(_ENCODERS[fmt])
     except KeyError:
         raise AudioError(f"unsupported output format: {fmt}") from None
+    if fmt == "mp3":
+        kbps = _quality_preference("mp3_bitrate_kbps", DEFAULT_MP3_BITRATE_KBPS, 64, 320)
+        args[args.index("-b:a") + 1] = f"{kbps}k"
+    elif fmt == "ogg":
+        quality = _quality_preference("ogg_quality", DEFAULT_OGG_QUALITY, 0, 10)
+        args[args.index("-q:a") + 1] = str(quality)
+    return args
 
 
 @lru_cache(maxsize=1)

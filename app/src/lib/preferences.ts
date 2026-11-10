@@ -15,6 +15,8 @@ export const DEFAULT_PREFERENCES: Preferences = {
   default_language: "en",
   default_output_format: "mp3",
   default_crossfade_ms: 0,
+  mp3_bitrate_kbps: 192,
+  ogg_quality: 5,
   default_music_seconds: 30,
   default_music_vocals: "instrumental",
   default_sfx_seconds: 3,
