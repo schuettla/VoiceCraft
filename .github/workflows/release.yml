@@ -11,7 +11,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        platform: [windows-latest, ubuntu-22.04, macos-14] # macos-14 = Apple Silicon
+        platform: [windows-latest, ubuntu-22.04, macos-latest] # macos-latest = Apple Silicon (arm64)
     runs-on: ${{ matrix.platform }}
     steps:
       - uses: actions/checkout@v4
