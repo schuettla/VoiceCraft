@@ -29,6 +29,17 @@ backend/     FastAPI + SQLite + ffmpeg  (see backend/README.md)
   model's licence shown before you download it.
 - Output as **WAV, MP3, OGG or FLAC**.
 
+## Screenshots
+
+![Generate: write a script and speak it in one of your voices](public/screenshots/generate.png)
+
+| | |
+|---|---|
+| ![Profiles](public/screenshots/profiles.png) | ![Library](public/screenshots/library.png) |
+| **Profiles**: clone a voice or pick a preset | **Library**: search, filter and export everything you made |
+
+![Settings](public/screenshots/settings.png)
+
 ## Download
 
 [![Latest release](https://img.shields.io/github/v/release/schuettla/VoiceCraft?label=latest%20release)](https://github.com/schuettla/VoiceCraft/releases/latest)
