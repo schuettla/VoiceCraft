@@ -4,7 +4,7 @@ import { Waveform } from "./Waveform";
 
 /* The intro/outro are pinned, non-draggable blocks at the very ends of the
  * timeline — kept visually distinct (a teal tint, the DESIGN.md decorative
- * accent rather than the acid-lime action color) so they read as a fixed
+ * accent rather than the Fern action color) so they read as a fixed
  * frame around the body, not just two more clips. */
 
 type SlotChange = (patch: Partial<Slot>, coalesce?: string) => void;

@@ -6,6 +6,15 @@ export function isTauri(): boolean {
   return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 }
 
+/**
+ * Whether the app draws its own title bar. On Windows the window is undecorated
+ * (`tauri.windows.conf.json`), so the app's top row is the title bar and carries
+ * the minimise / maximise / close buttons. macOS and Linux keep native chrome.
+ */
+export function customTitleBar(): boolean {
+  return isTauri() && /Windows/i.test(navigator.userAgent);
+}
+
 export interface SetupStatus {
   ready: boolean;
   python_version: string | null;

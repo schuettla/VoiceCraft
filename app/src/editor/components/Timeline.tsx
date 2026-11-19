@@ -114,7 +114,7 @@ export function Timeline() {
   const { intro, outro } = data;
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border bg-ink-950">
+    <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-ink-950">
       <div className="flex items-center gap-1 border-b bg-card px-2 py-1.5">
         <IconButton
           size="icon-xs"

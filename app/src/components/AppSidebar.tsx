@@ -9,11 +9,11 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { isTauri } from "@/lib/tauri";
-import { SystemResources } from "@/components/SystemResources";
+import { TOOLBAR_H } from "@/components/common";
+import { cn } from "@/lib/utils";
 import {
   Sidebar,
   SidebarContent,
-  SidebarFooter,
   SidebarGroup,
   SidebarGroupContent,
   SidebarGroupLabel,
@@ -22,6 +22,7 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
   SidebarRail,
+  SidebarTrigger,
 } from "@/components/ui/sidebar";
 
 export type View = "profiles" | "generate" | "library" | "edit" | "models" | "settings";
@@ -67,13 +68,18 @@ export function AppSidebar({
 }) {
   return (
     <Sidebar collapsible="icon">
-      <SidebarHeader className="h-12 justify-center border-b px-4">
-        <span className="text-[15px] font-semibold tracking-tight text-white group-data-[collapsible=icon]:hidden">
+      <SidebarHeader
+        data-tauri-drag-region
+        className={cn(
+          "flex-row items-center justify-between border-b px-3 py-0",
+          TOOLBAR_H,
+          "group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-0",
+        )}
+      >
+        <span className="pointer-events-none pl-1 text-[15px] font-semibold tracking-tight text-white group-data-[collapsible=icon]:hidden">
           Voice<span className="text-primary">Craft</span>
         </span>
-        <span className="hidden text-sm font-semibold text-primary group-data-[collapsible=icon]:block">
-          V
-        </span>
+        <SidebarTrigger className="text-muted-foreground" />
       </SidebarHeader>
 
       <SidebarContent>
@@ -95,25 +101,21 @@ export function AppSidebar({
                     </SidebarMenuButton>
                   </SidebarMenuItem>
                 ))}
+                {/* Re-running setup is a system task, so it lives with Models and Settings. */}
+                {group.label === "System" && isTauri() && (
+                  <SidebarMenuItem>
+                    <SidebarMenuButton tooltip="Re-run engine setup" onClick={onRunSetup}>
+                      <Wrench />
+                      <span>Engine setup</span>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                )}
               </SidebarMenu>
             </SidebarGroupContent>
           </SidebarGroup>
         ))}
       </SidebarContent>
 
-      <SidebarFooter className="gap-0 p-0">
-        {isTauri() && (
-          <SidebarMenu className="p-2">
-            <SidebarMenuItem>
-              <SidebarMenuButton tooltip="Re-run engine setup" onClick={onRunSetup}>
-                <Wrench />
-                <span>Engine setup</span>
-              </SidebarMenuButton>
-            </SidebarMenuItem>
-          </SidebarMenu>
-        )}
-        <SystemResources />
-      </SidebarFooter>
       <SidebarRail />
     </Sidebar>
   );

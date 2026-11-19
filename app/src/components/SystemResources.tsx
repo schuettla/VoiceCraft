@@ -1,32 +1,17 @@
 import { useEffect, useState } from "react";
-import { ChevronUp } from "lucide-react";
 import { api } from "@/lib/api";
 import type { Resources } from "@/lib/types";
 import { formatBytes } from "@/lib/format";
 import { cn } from "@/lib/utils";
-import { Progress } from "@/components/ui/progress";
-import { useSidebar } from "@/components/ui/sidebar";
-import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from "@/components/ui/collapsible";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 
 const POLL_MS = 3000;
 
-/** Live machine load, pinned to the bottom of the sidebar. Collapsible, and
- * hidden entirely while the sidebar is an icon rail. */
+/** Live machine load as compact readouts for the status bar: RAM, CPU, GPU. */
 export function SystemResources() {
   const [data, setData] = useState<Resources | null>(null);
-  const [open, setOpen] = useState(true);
-
-  const { state, isMobile } = useSidebar();
-  // The data is only visible while the panel is expanded AND the sidebar is not
-  // an icon rail — only then is it worth asking the backend for it.
-  const visible = open && (isMobile || state === "expanded");
 
   useEffect(() => {
-    if (!visible) return;
     let alive = true;
     const tick = () =>
       api
@@ -39,67 +24,92 @@ export function SystemResources() {
       alive = false;
       window.clearInterval(timer);
     };
-  }, [visible]);
+  }, []);
 
-  const ramPct = data ? pct(data.ram_used_bytes, data.ram_total_bytes) : null;
-  const gpuPct = data ? pct(data.gpu_mem_used_bytes, data.gpu_mem_total_bytes) : null;
+  if (!data) return null;
+
+  const ramPct = pct(data.ram_used_bytes, data.ram_total_bytes);
+  const gpuPct = pct(data.gpu_mem_used_bytes, data.gpu_mem_total_bytes);
 
   return (
-    <Collapsible
-      open={open}
-      onOpenChange={setOpen}
-      className="border-t group-data-[collapsible=icon]:hidden"
-    >
-      <CollapsibleTrigger className="flex w-full items-center justify-between px-4 py-2.5 text-xs font-medium text-foreground">
-        System Resources
-        <ChevronUp
-          className={cn(
-            "size-4 text-muted-foreground transition-transform",
-            !open && "rotate-180",
-          )}
-        />
-      </CollapsibleTrigger>
-      <CollapsibleContent>
-        {data && (
-        <div className="space-y-3 px-4 pb-4">
+    <Popover>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          className="flex h-full items-center gap-4 px-2 transition-colors hover:bg-white/[0.06] hover:text-foreground data-[state=open]:bg-white/[0.08] data-[state=open]:text-foreground"
+        >
           {data.ram_total_bytes != null && (
-            <Meter
+            <Readout
               label="RAM"
               value={ramPct}
-              left={`Used ${formatBytes(data.ram_used_bytes)}`}
-              right={`Total ${formatBytes(data.ram_total_bytes)}`}
+              text={`${formatBytes(data.ram_used_bytes)} / ${formatBytes(data.ram_total_bytes)}`}
             />
           )}
           {data.cpu_percent != null && (
-            <Meter
+            <Readout
               label="CPU"
               value={data.cpu_percent}
-              left={data.cpu_cores ? `${data.cpu_cores} cores` : ""}
-              right={data.cpu_vendor ?? ""}
+              text={`${Math.round(data.cpu_percent)}%`}
             />
           )}
           {data.gpu_backend ? (
-            <Meter
+            <Readout
               label="GPU"
               value={data.gpu_mem_total_bytes ? gpuPct : null}
-              valueLabel={data.gpu_mem_total_bytes ? undefined : "—"}
-              left={
+              text={
                 data.gpu_mem_total_bytes
-                  ? `VRAM ${formatBytes(data.gpu_mem_used_bytes)} / ${formatBytes(data.gpu_mem_total_bytes)}`
-                  : "Compute engine"
+                  ? `${formatBytes(data.gpu_mem_used_bytes)} / ${formatBytes(data.gpu_mem_total_bytes)}`
+                  : data.gpu_backend
               }
-              right={data.gpu_backend}
             />
           ) : (
-            <div className="flex items-center justify-between text-[11px] text-muted-foreground">
-              <span className="font-medium text-foreground">GPU</span>
-              <span>No GPU detected</span>
-            </div>
+            <span className="text-muted-foreground">
+              GPU —
+            </span>
           )}
-        </div>
-        )}
-      </CollapsibleContent>
-    </Collapsible>
+        </button>
+      </PopoverTrigger>
+      <PopoverContent side="top" align="end" sideOffset={6} className="w-80 p-0 text-[13px]">
+        <div className="border-b px-3 py-2.5 font-medium text-foreground">System resources</div>
+        <dl className="divide-y">
+          <Detail
+            label="Memory"
+            value={ramPct}
+            lines={[
+              data.ram_total_bytes != null
+                ? `${formatBytes(data.ram_used_bytes)} used of ${formatBytes(data.ram_total_bytes)}`
+                : "Unknown",
+            ]}
+          />
+          <Detail
+            label="CPU"
+            value={data.cpu_percent}
+            lines={[
+              data.cpu_vendor ?? "Processor",
+              data.cpu_cores ? `${data.cpu_cores} cores` : null,
+            ]}
+          />
+          <Detail
+            label="GPU"
+            value={data.gpu_mem_total_bytes ? gpuPct : null}
+            lines={
+              data.gpu_backend
+                ? [
+                    data.gpu_name ?? "Graphics card",
+                    data.gpu_mem_total_bytes
+                      ? `${formatBytes(data.gpu_mem_used_bytes)} of ${formatBytes(data.gpu_mem_total_bytes)} video memory used`
+                      : null,
+                    `Compute: ${data.gpu_backend}`,
+                  ]
+                : ["No GPU detected — models run on the CPU."]
+            }
+          />
+        </dl>
+        <p className="border-t px-3 py-2 text-[11px] text-muted-foreground">
+          Updated every {POLL_MS / 1000} s.
+        </p>
+      </PopoverContent>
+    </Popover>
   );
 }
 
@@ -107,32 +117,71 @@ function pct(used: number | null | undefined, total: number | null | undefined):
   return used != null && total ? Math.min(100, (used / total) * 100) : null;
 }
 
-function Meter({
+/** `LABEL  ▬▬▬▭▭  text` — a tiny meter with its number, one status-bar cell. */
+function Readout({
   label,
   value,
-  valueLabel,
-  left,
-  right,
+  text,
 }: {
   label: string;
   value: number | null;
-  valueLabel?: string;
-  left: string;
-  right: string;
+  text: string;
 }) {
   return (
-    <div className="space-y-1.5">
-      <div className="flex items-baseline justify-between text-xs">
-        <span className="font-medium text-foreground">{label}</span>
-        <span className="font-medium tabular-nums text-foreground">
-          {valueLabel ?? (value != null ? `${Math.round(value)}%` : "—")}
+    <div className="flex items-center gap-1.5">
+      <span className="font-medium text-foreground/80">{label}</span>
+      {value != null && (
+        <span className="h-1 w-10 overflow-hidden rounded-full bg-white/10">
+          <span
+            className={cn(
+              "block h-full rounded-full bg-muted-foreground transition-[width]",
+              value > 90 && "bg-coral-red",
+              value > 75 && value <= 90 && "bg-warning",
+            )}
+            style={{ width: `${value}%` }}
+          />
+        </span>
+      )}
+      <span className="tabular-nums">{text}</span>
+    </div>
+  );
+}
+
+/** One resource in the details panel: name, percentage with a bar, then facts. */
+function Detail({
+  label,
+  value,
+  lines,
+}: {
+  label: string;
+  value: number | null;
+  lines: (string | null)[];
+}) {
+  return (
+    <div className="space-y-1.5 px-3 py-2.5">
+      <div className="flex items-baseline justify-between">
+        <dt className="font-medium text-foreground">{label}</dt>
+        <span className="tabular-nums text-foreground">
+          {value != null ? `${Math.round(value)}%` : "—"}
         </span>
       </div>
-      <Progress value={value ?? 0} className="h-1 bg-white/10" />
-      <div className="flex justify-between gap-2 text-[11px] text-muted-foreground">
-        <span className="truncate">{left}</span>
-        <span className="shrink-0">{right}</span>
-      </div>
+      {value != null && (
+        <div className="h-1 overflow-hidden rounded-full bg-white/10">
+          <div
+            className={cn(
+              "h-full rounded-full bg-muted-foreground",
+              value > 90 && "bg-coral-red",
+              value > 75 && value <= 90 && "bg-warning",
+            )}
+            style={{ width: `${value}%` }}
+          />
+        </div>
+      )}
+      {lines.filter(Boolean).map((line) => (
+        <dd key={line} className="text-xs text-muted-foreground">
+          {line}
+        </dd>
+      ))}
     </div>
   );
 }

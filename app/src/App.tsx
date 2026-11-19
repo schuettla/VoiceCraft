@@ -4,13 +4,15 @@ import type { Health } from "./lib/types";
 import { isTauri, setupApi } from "./lib/tauri";
 import { cn } from "@/lib/utils";
 import { ToastProvider } from "./components/Toaster";
-import { EngineStatus } from "./components/EngineStatus";
+import { StatusBar } from "./components/StatusBar";
+import { BareTitleBar, WindowControls } from "./components/WindowControls";
+import { PageBarSlot, TOOLBAR_H } from "./components/common";
 import { UpdateNotifier } from "./components/UpdateNotifier";
 import { ConfirmProvider } from "./components/Confirm";
 import { AudioProvider, PlayerDock } from "./components/AudioPlayer";
-import { AppSidebar, VIEW_LABEL, type View } from "./components/AppSidebar";
-import { Separator } from "@/components/ui/separator";
-import { SidebarInset, SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
+import { AppSidebar, NAV_GROUPS, type View } from "./components/AppSidebar";
+import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
+import { useDesktopBehavior } from "@/hooks/use-desktop-behavior";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ProfilesPage } from "./pages/Profiles";
 import { GeneratePage, type GenerateHandoff } from "./pages/Generate";
@@ -19,6 +21,12 @@ import { EditPage } from "./pages/Edit";
 import { ModelsPage } from "./pages/Models";
 import { SettingsPage } from "./pages/Settings";
 import { SetupPage } from "./pages/Setup";
+
+/** Views that lay out their own panes and scrolling instead of one scrolling page. */
+const FULL_BLEED: View[] = ["edit", "generate", "settings"];
+
+/** Nav order, so Ctrl+1…6 matches what the sidebar shows top to bottom. */
+const VIEW_ORDER = NAV_GROUPS.flatMap((group) => group.items.map((item) => item.id));
 
 type Phase = "booting" | "setup" | "ready";
 
@@ -34,6 +42,10 @@ export default function App() {
     setHandoff(next);
     setView("generate");
   }, []);
+
+  useDesktopBehavior(VIEW_ORDER, setView);
+  // The top-row element pages portal their header into (see PageHeader).
+  const [pageBar, setPageBar] = useState<HTMLElement | null>(null);
 
   /** Boot: wait for the backend; fall back to onboarding if it can't start. */
   const boot = useCallback(async () => {
@@ -87,11 +99,14 @@ export default function App() {
 
   if (phase === "booting") {
     return (
-      <div className="flex h-full flex-col items-center justify-center gap-3">
-        <span className="text-lg font-semibold tracking-tight text-white">
-          Voice<span className="text-primary">Craft</span>
-        </span>
-        <span className="text-sm text-muted-foreground">Starting the speech engine…</span>
+      <div className="flex h-full flex-col">
+        <BareTitleBar />
+        <div className="flex flex-1 flex-col items-center justify-center gap-3">
+          <span className="text-lg font-semibold tracking-tight text-white">
+            Voice<span className="text-primary">Craft</span>
+          </span>
+          <span className="text-sm text-muted-foreground">Starting the speech engine…</span>
+        </div>
       </div>
     );
   }
@@ -100,14 +115,17 @@ export default function App() {
     return (
       <TooltipProvider>
         <ToastProvider>
-          <main className="h-full overflow-y-auto px-6">
-            <SetupPage
-              onReady={() => {
-                setPhase("ready");
-                void poll();
-              }}
-            />
-          </main>
+          <div className="flex h-full flex-col">
+            <BareTitleBar />
+            <main className="min-h-0 flex-1 overflow-y-auto px-6">
+              <SetupPage
+                onReady={() => {
+                  setPhase("ready");
+                  void poll();
+                }}
+              />
+            </main>
+          </div>
         </ToastProvider>
       </TooltipProvider>
     );
@@ -129,44 +147,51 @@ export default function App() {
               onRunSetup={() => setPhase("setup")}
             />
             <SidebarInset className="min-h-0 overflow-hidden">
-              <header className="flex h-12 shrink-0 items-center gap-2 border-b px-4">
-                <SidebarTrigger className="-ml-1 text-muted-foreground" />
-                <Separator orientation="vertical" className="mr-1 data-[orientation=vertical]:h-4" />
-                <span className="text-sm text-muted-foreground">{VIEW_LABEL[view]}</span>
-                <EngineStatus health={health} reachable={reachable} />
+              {/* The window's top row: the current page's bar (portalled in by
+                  PageHeader) and, on Windows, the caption buttons. */}
+              <header
+                data-tauri-drag-region
+                className={cn("flex shrink-0 items-stretch border-b bg-background", TOOLBAR_H)}
+              >
+                <div ref={setPageBar} data-tauri-drag-region className="flex min-w-0 flex-1" />
+                <WindowControls />
               </header>
-
-              {/* The editor manages its own scrolling and fixed layout; every
-                  other page scrolls inside a centred, readable column. */}
+              <PageBarSlot.Provider value={pageBar}>
+              {/* The editor and Generate manage their own panes and scrolling;
+                  every other page scrolls as one column. */}
               <main
                 className={cn(
                   "min-h-0 flex-1",
-                  view === "edit" ? "overflow-hidden" : "overflow-y-auto",
+                  FULL_BLEED.includes(view) ? "overflow-hidden" : "overflow-y-auto",
                 )}
               >
-                {view === "edit" ? (
-                  <EditPage />
-                ) : (
-                  <div className="mx-auto w-full max-w-4xl px-8 py-8">
+                {view === "edit" && <EditPage />}
+                {view === "generate" && (
+                  <GeneratePage
+                    health={health}
+                    onOpenModels={() => setView("models")}
+                    handoff={handoff}
+                    onHandoffUsed={clearHandoff}
+                  />
+                )}
+                {view === "settings" && <SettingsPage onRunSetup={() => setPhase("setup")} />}
+                {!FULL_BLEED.includes(view) && (
+                  <div className="px-6 py-5">
                     {view === "profiles" && <ProfilesPage health={health} />}
-                    {view === "generate" && (
-                      <GeneratePage
-                        health={health}
-                        onOpenModels={() => setView("models")}
-                        handoff={handoff}
-                        onHandoffUsed={clearHandoff}
-                      />
-                    )}
                     {view === "library" && <LibraryPage onOpenInGenerate={openInGenerate} />}
                     {view === "models" && <ModelsPage />}
-                    {view === "settings" && (
-                      <SettingsPage onRunSetup={() => setPhase("setup")} />
-                    )}
                   </div>
                 )}
               </main>
+              </PageBarSlot.Provider>
 
               <PlayerDock />
+              <StatusBar
+                health={health}
+                reachable={reachable}
+                onOpenModels={() => setView("models")}
+                onRunSetup={() => setPhase("setup")}
+              />
             </SidebarInset>
           </SidebarProvider>
         </AudioProvider>

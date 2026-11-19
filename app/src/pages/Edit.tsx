@@ -139,7 +139,7 @@ export function EditPage() {
                     <MediaBin />
                   </div>
                 )}
-                <div className="flex min-w-0 flex-1 flex-col gap-2 p-2">
+                <div className="flex min-w-0 flex-1 flex-col">
                   <Timeline />
                   <TransportBar />
                 </div>

@@ -1,4 +1,5 @@
-import type { ReactNode } from "react";
+import { createContext, useContext, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { cn } from "@/lib/utils";
 import { Badge as ShadBadge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -21,29 +22,54 @@ export const cx = cn;
 
 /* ------------------------------------------------------------------ layout */
 
-/** Flat page title bar. No box: the page itself is the surface. */
+/** Height of the window's top row (sidebar header + page bar), so hairlines line up. */
+export const TOOLBAR_H = "h-11";
+
+/** The element in the shell's top row that the current page's header renders into. */
+export const PageBarSlot = createContext<HTMLElement | null>(null);
+
+/**
+ * The page's bar: title, a one-line hint, optional inline controls (`children`)
+ * and the page actions. It is portalled into the window's top row — which on
+ * Windows is also the title bar — so pages never draw their own header strip.
+ * Empty space and the title are a window drag region.
+ */
 export function PageHeader({
   title,
   description,
   actions,
+  children,
   className,
 }: {
   title: string;
   description?: ReactNode;
   actions?: ReactNode;
+  /** Controls shown right after the title (e.g. the editor's project name). */
+  children?: ReactNode;
   className?: string;
 }) {
-  return (
-    <div className={cn("flex items-end justify-between gap-6 pb-6", className)}>
-      <div className="min-w-0">
-        <h1 className="text-xl font-semibold tracking-tight text-foreground">{title}</h1>
+  const slot = useContext(PageBarSlot);
+  const bar = (
+    <div
+      data-tauri-drag-region
+      className={cn("flex h-full min-w-0 flex-1 items-center gap-3 pl-4 pr-2", className)}
+    >
+      <div className="pointer-events-none flex min-w-0 shrink items-baseline gap-3">
+        <h1 className="shrink-0 text-[13px] font-semibold tracking-tight text-foreground">
+          {title}
+        </h1>
         {description && (
-          <p className="mt-1 text-sm text-muted-foreground">{description}</p>
+          <p className="truncate text-xs text-muted-foreground">{description}</p>
         )}
       </div>
+      {children && <div className="flex min-w-0 items-center gap-1.5">{children}</div>}
+      <div data-tauri-drag-region className="h-full min-w-4 flex-1" />
       {actions && <div className="flex shrink-0 items-center gap-2">{actions}</div>}
     </div>
   );
+  if (slot) return createPortal(bar, slot);
+  // Outside the shell (no top row to render into): a plain bar in the flow.
+  return <div className={cn("mb-5 flex border-b", TOOLBAR_H)}>{bar}</div>;
 }
 
 /** A titled block of a page — separated by whitespace, not a bordered box. */

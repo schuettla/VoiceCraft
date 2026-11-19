@@ -20,6 +20,11 @@ serde_json = "1"
 # Bakes backend/ into the exe so a lone VoiceCraft.exe is a complete portable build.
 rust-embed = { version = "8", features = ["include-exclude"] }
 
+# Debug builds: keep file/line info for backtraces but drop full variable debug info.
+# Cuts src-tauri/target/debug size substantially; only step-debugging of locals is reduced.
+[profile.dev]
+debug = "line-tables-only"
+
 [profile.release]
 codegen-units = 1
 lto = true

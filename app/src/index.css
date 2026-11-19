@@ -4,13 +4,13 @@
 @custom-variant dark (&:is(.dark *));
 
 /*
- * Linear — "midnight precision instrument"
- * Near-black substrate, paper-white type at tight tracking, one electric
- * acid-lime accent used as a functional flashlight. Elevation comes from
+ * VoiceCraft — near-black substrate, paper-white type at tight tracking, and
+ * one soft Fern green (#86d38f) used as a functional flashlight: the primary
+ * action, the active item, what is playing, and "ready". Elevation comes from
  * hairline borders, not shadow. See DESIGN.md.
  *
  * The app was built against an `ink-*` / `accent` token scale; those names are
- * kept but their values now map onto Linear's ramp, so the whole UI re-skins
+ * kept but their values now map onto this ramp, so the whole UI re-skins
  * without touching every page.
  */
 @theme {
@@ -29,10 +29,11 @@
   --color-ink-200: #d0d6e0; /* Mist — body copy, button text on dark */
   --color-ink-100: #e5e5e6; /* Bone — near-white fills */
 
-  /* Acid Lime (#e4f222) is the shadcn `primary` token — see :root below. */
+  /* Fern (#86d38f) is the shadcn `primary` token — see :root below. */
 
   /* Supporting accents — decorative / tag fills, never status. */
-  --color-pulse-green: #27a644;
+  /* Success shares the Fern green: "ready" and "act here" are one signal. */
+  --color-pulse-green: #86d38f;
   --color-coral-red: #eb5757;
   --color-signal-teal: #02b8cc;
   --color-iris-violet: #6366f1;
@@ -58,7 +59,7 @@ body {
   font-family: var(--font-sans);
   font-size: 14px;
   letter-spacing: -0.011em;
-  /* Inter alternate glyphs — Linear's typographic signature. */
+  /* Inter alternate glyphs: single-storey a, open digits, slashed zero. */
   font-feature-settings: "cv01" on, "ss03" on, "zero" on;
   overflow: hidden;
   -webkit-font-smoothing: antialiased;
@@ -90,11 +91,32 @@ audio {
   color-scheme: dark;
 }
 
-/* Buttons and links don't get a pointer cursor from the UA stylesheet. */
-button:not(:disabled),
-a[href],
-[role="button"]:not([aria-disabled="true"]) {
+/* Desktop controls keep the arrow cursor — the pointing hand is a web-link cue.
+ * Only real hyperlinks (opened in the system browser) and text fields differ. */
+html {
+  cursor: default;
+}
+button,
+[role="button"],
+[role="tab"],
+[role="menuitem"],
+[role="option"],
+select,
+summary {
+  cursor: default;
+}
+a[href] {
   cursor: pointer;
+}
+input:not([type="range"]):not([type="checkbox"]),
+textarea {
+  cursor: text;
+}
+
+/* No rubber-banding or scroll chaining out of panes: the window itself never scrolls. */
+html,
+body {
+  overscroll-behavior: none;
 }
 
 /* Native controls: keep the OS-drawn parts (the open <option> list, spinners,
@@ -109,12 +131,15 @@ option {
 }
 
 ::-webkit-scrollbar {
-  width: 10px;
-  height: 10px;
+  width: 12px;
+  height: 12px;
 }
 ::-webkit-scrollbar-thumb {
   background: var(--color-ink-700);
   border-radius: 9999px;
+  /* An inset track-coloured border makes the thumb slimmer than its hit area. */
+  border: 3px solid transparent;
+  background-clip: padding-box;
 }
 ::-webkit-scrollbar-thumb:hover {
   background: var(--color-ink-600);
@@ -135,7 +160,7 @@ option {
   --card-foreground: #e5e5e6;
   --popover: #131415;
   --popover-foreground: #e5e5e6;
-  --primary: #e4f222;
+  --primary: #86d38f;
   --primary-foreground: #08090a;
   --secondary: #161718;
   --secondary-foreground: #d0d6e0;
@@ -146,15 +171,15 @@ option {
   --destructive: #eb5757;
   --border: #23252a;
   --input: #2f3237;
-  --ring: #e4f222;
+  --ring: #86d38f;
   --sidebar: #0b0c0d;
   --sidebar-foreground: #a9aeb7;
-  --sidebar-primary: #e4f222;
+  --sidebar-primary: #86d38f;
   --sidebar-primary-foreground: #08090a;
   --sidebar-accent: #17181a;
   --sidebar-accent-foreground: #ffffff;
   --sidebar-border: #1b1c1f;
-  --sidebar-ring: #e4f222;
+  --sidebar-ring: #86d38f;
 }
 
 @theme inline {

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Loader2 } from "lucide-react";
+import { Cpu, Loader2 } from "lucide-react";
 import type { AudioEngine } from "../lib/types";
 import { formatBytes } from "../lib/format";
 import { isTauri, listen, setupApi, type EngineState } from "../lib/tauri";
@@ -132,15 +132,23 @@ export function EnginePanel({
   if (engines.length === 0) return null;
 
   return (
-    <div className="mb-3 space-y-3">
+    // Rows in the same list language as the model rows that follow: the list's
+    // own top border closes this block, so only the top edge and dividers here.
+    <div className="divide-y border-t">
       {engines.map((engine) => {
         const mine = job?.engine === engine.name;
         const otherBusy = job !== null && !mine;
         return (
-          <div key={engine.name} className="rounded-md border bg-card/40 px-3 py-3">
-            <div className="flex flex-wrap items-center gap-2">
+          <div key={engine.name} className="px-2 py-3">
+            <div className="flex items-center gap-3">
+              <span
+                aria-hidden="true"
+                className="flex size-6 shrink-0 items-center justify-center rounded-full border text-muted-foreground"
+              >
+                <Cpu className="size-3.5" />
+              </span>
               <span className="text-sm font-medium text-foreground">{engine.label}</span>
-              <span className="text-xs text-muted-foreground">engine</span>
+              <span className="-ml-1 text-xs text-muted-foreground">engine</span>
               {engine.installed ? (
                 <Badge tone="good">installed</Badge>
               ) : (
@@ -176,21 +184,21 @@ export function EnginePanel({
             </div>
 
             {!engine.supported && engine.unsupported_reason && (
-              <p className="mt-2 text-xs text-muted-foreground">{engine.unsupported_reason}</p>
+              <p className="mt-1 pl-9 text-xs text-muted-foreground">{engine.unsupported_reason}</p>
             )}
             {!desktop && (
-              <p className="mt-2 text-xs text-muted-foreground">
+              <p className="mt-1 pl-9 text-xs text-muted-foreground">
                 Installing engines is only available in the desktop app.
               </p>
             )}
             {otherBusy && (
-              <p className="mt-2 text-xs text-muted-foreground">
+              <p className="mt-1 pl-9 text-xs text-muted-foreground">
                 Another engine is being changed — one at a time.
               </p>
             )}
 
             {failure?.engine === engine.name && (
-              <Notice tone="bad" className="mt-2">
+              <Notice tone="bad" className="mt-2 ml-9">
                 {failure.message}
               </Notice>
             )}
@@ -198,7 +206,7 @@ export function EnginePanel({
             {(mine || (failure?.engine === engine.name && log.length > 0)) && (
               <pre
                 ref={mine ? logRef : undefined}
-                className="mt-2 max-h-40 overflow-auto rounded bg-black/30 p-2 font-mono text-[11px] leading-snug text-muted-foreground"
+                className="mt-2 ml-9 max-h-40 overflow-auto rounded bg-black/30 p-2 font-mono text-[11px] leading-snug text-muted-foreground"
               >
                 {log.join("\n") || "Starting…"}
               </pre>

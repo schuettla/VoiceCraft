@@ -33,7 +33,6 @@ import {
 } from "../components/common";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Separator } from "@/components/ui/separator";
 import { Slider } from "@/components/ui/slider";
 import { Textarea } from "@/components/ui/textarea";
 import { DownloadIcon, FolderIcon, SpinnerIcon, TrashIcon, WandIcon } from "../components/icons";
@@ -245,9 +244,10 @@ export function GeneratePage({
   );
 
   return (
-    <>
-      <div id="generate-top" />
-      <PageHeader
+    // Two panes, each scrolling on its own: the form on the left, what it has
+    // made on the right. Below `lg` they stack and the page scrolls as one.
+    <div className="flex h-full min-h-0 flex-col">
+        <PageHeader
         title="Generate"
         description={MODE_DESCRIPTION[mode]}
         actions={
@@ -261,8 +261,10 @@ export function GeneratePage({
             ]}
           />
         }
-      />
+        />
 
+      <div className="grid min-h-0 flex-1 grid-cols-1 max-lg:overflow-y-auto lg:grid-cols-[minmax(26rem,30rem)_minmax(0,1fr)]">
+      <div id="generate-top" className="space-y-5 px-6 py-5 lg:overflow-y-auto lg:border-r">
       {mode === "music" && (
         <MusicForm
           engines={engines?.filter((item) => item.kind === "music") ?? null}
@@ -362,7 +364,7 @@ export function GeneratePage({
 
         {kitten && (
           <div className="space-y-2">
-            <div className="grid gap-4 sm:grid-cols-[minmax(0,12rem)_minmax(0,10rem)]">
+            <div className="grid grid-cols-2 gap-4">
               <Field label="Style" hint="Expressive is livelier but a little less steady.">
                 <OptionSelect
                   value={style}
@@ -389,28 +391,29 @@ export function GeneratePage({
           </div>
         )}
 
-        <div className="flex items-end gap-6">
-          {kitten ? (
-            // KittenTTS 2 has no speed control; saying so beats a slider that does nothing.
-            <p className="w-64 text-xs text-muted-foreground">
-              KittenTTS 2 sets its own pace — there is no speed control.
-            </p>
-          ) : (
-            <Field label={`Speed — ${speed.toFixed(2)}×`} className="w-64">
-              <Slider
-                min={0.5}
-                max={2}
-                step={0.05}
-                value={[speed]}
-                onValueChange={([next]) => setSpeed(next)}
-                className="py-2"
-              />
-            </Field>
-          )}
-          <span className="ml-auto pb-2 text-[13px] tabular-nums text-muted-foreground">
+        {kitten ? (
+          // KittenTTS 2 has no speed control; saying so beats a slider that does nothing.
+          <p className="text-xs text-muted-foreground">
+            KittenTTS 2 sets its own pace — there is no speed control.
+          </p>
+        ) : (
+          <Field label={`Speed — ${speed.toFixed(2)}×`}>
+            <Slider
+              min={0.5}
+              max={2}
+              step={0.05}
+              value={[speed]}
+              onValueChange={([next]) => setSpeed(next)}
+              className="py-2"
+            />
+          </Field>
+        )}
+
+        <div className="flex items-end gap-3">
+          <span className="pb-2 text-[13px] tabular-nums text-muted-foreground">
             {words} {words === 1 ? "word" : "words"}
           </span>
-          <Field label="Format" className="w-28">
+          <Field label="Format" className="ml-auto w-24">
             <OptionSelect
               value={format}
               onChange={(value) => setFormat(value as AudioFormat)}
@@ -430,18 +433,21 @@ export function GeneratePage({
         </div>
       </form>
 
-      <Separator className="my-8" />
+      </div>
 
-      <SessionPanel
-        mode={mode}
-        generations={generations}
-        names={names}
-        modelTitles={modelTitles}
-        exportFormat={preferences.default_output_format}
-        onChanged={refresh}
-        onEdit={startEdit}
-      />
-    </>
+      <div className="px-6 py-5 lg:overflow-y-auto">
+        <SessionPanel
+          mode={mode}
+          generations={generations}
+          names={names}
+          modelTitles={modelTitles}
+          exportFormat={preferences.default_output_format}
+          onChanged={refresh}
+          onEdit={startEdit}
+        />
+      </div>
+      </div>
+    </div>
   );
 }
 

@@ -30,7 +30,7 @@ export function Transport({ totalDuration }: { totalDuration: number }) {
   }, [engine.analyser]);
 
   return (
-    <div className="flex items-center gap-3 rounded-lg border bg-card px-3 py-2">
+    <div className="flex h-11 shrink-0 items-center gap-3 border-t bg-card px-3">
       <Button
         size="icon-sm"
         className="rounded-full"

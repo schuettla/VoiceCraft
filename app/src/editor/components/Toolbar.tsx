@@ -1,6 +1,6 @@
 import { useState } from "react";
-import { Redo2, Undo2 } from "lucide-react";
-import { Badge, IconButton, cx } from "../../components/common";
+import { Files, Redo2, Undo2 } from "lucide-react";
+import { Badge, IconButton, PageHeader, cx } from "../../components/common";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Separator } from "@/components/ui/separator";
@@ -11,7 +11,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { FolderIcon, PlusIcon, SidebarIcon, TrashIcon } from "../../components/icons";
+import { FolderIcon, PlusIcon, TrashIcon } from "../../components/icons";
 import { useEditor } from "../store";
 import { useLayout } from "../useLayout";
 import * as ops from "../ops";
@@ -78,29 +78,43 @@ export function Toolbar({
   }
 
   return (
-    <div className="flex flex-wrap items-center gap-1.5 border-b bg-card px-3 py-2">
-      <IconButton label="Projects" onClick={onOpenProjects}>
+    <>
+    {/* Project identity and the one primary action live in the window's top row. */}
+    <PageHeader
+      title="Editor"
+      actions={
+        <Button size="sm" onClick={() => setShowExport(true)}>
+          Export
+        </Button>
+      }
+    >
+      <Separator orientation="vertical" className="mx-1 data-[orientation=vertical]:h-4" />
+      <IconButton label="Projects" size="icon-xs" onClick={onOpenProjects}>
         <FolderIcon />
       </IconButton>
       <Input
         value={editor.state.projectName}
         onChange={(e) => editor.rename(e.target.value)}
         aria-label="Project name"
-        className="h-8 max-w-[220px] min-w-0 flex-1 border-transparent bg-transparent px-2 font-medium text-white shadow-none hover:border-input focus-visible:bg-transparent dark:bg-transparent"
+        className="h-7 w-[220px] min-w-0 border-transparent bg-transparent px-1.5 text-[13px] font-medium text-foreground shadow-none hover:border-input focus-visible:bg-transparent dark:bg-transparent"
       />
       <Badge tone={editor.state.saveState === "error" ? "bad" : "neutral"} className={cx(!SAVE_LABEL[editor.state.saveState] && "hidden")}>
         {SAVE_LABEL[editor.state.saveState]}
       </Badge>
+    </PageHeader>
 
-      <Separator orientation="vertical" className="mx-1 data-[orientation=vertical]:h-5" />
-
-      <IconButton
-        label={mediaOpen ? "Hide media panel" : "Show media panel"}
-        className={cx(mediaOpen && "bg-accent text-foreground")}
+    {/* Tool strip: one fixed-height row; scrolls sideways rather than wrapping. */}
+    <div className="flex h-10 shrink-0 items-center gap-1 overflow-x-auto border-b bg-card px-2 [scrollbar-width:none]">
+      <Button
+        size="sm"
+        variant="ghost"
+        aria-pressed={mediaOpen}
+        className={cx("text-muted-foreground", mediaOpen && "bg-accent text-foreground")}
         onClick={onToggleMedia}
+        title={mediaOpen ? "Hide the media panel" : "Show the media panel"}
       >
-        <SidebarIcon />
-      </IconButton>
+        <Files /> Media
+      </Button>
 
       <Separator orientation="vertical" className="mx-1 data-[orientation=vertical]:h-5" />
 
@@ -168,16 +182,12 @@ export function Toolbar({
         Loudness
       </Button>
 
-      <div className="ml-auto flex items-center gap-2">
-        <Button size="sm" onClick={() => setShowExport(true)}>
-          Export
-        </Button>
-      </div>
+    </div>
 
       {showExport && <ExportDialog onClose={() => setShowExport(false)} />}
       {showSilence && <SilenceDialog onClose={() => setShowSilence(false)} />}
       {showLoudness && <LoudnessDialog onClose={() => setShowLoudness(false)} />}
-    </div>
+    </>
   );
 }
 
